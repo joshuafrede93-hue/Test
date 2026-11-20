@@ -3,6 +3,11 @@ name: Build Windows exe
 on:
   workflow_dispatch:
   push:
+    branches: [asisten-pc]
+    tags: ["asistenpc-v*"]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -28,3 +33,12 @@ jobs:
         with:
           name: AsistenPC-windows
           path: dist/AsistenPC
+      - name: Buat zip untuk rilis
+        shell: pwsh
+        run: Compress-Archive -Path dist/AsistenPC -DestinationPath AsistenPC-windows.zip
+      - name: Terbitkan rilis (hanya saat tag)
+        if: startsWith(github.ref, 'refs/tags/asistenpc-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AsistenPC-windows.zip
+          body: "Asisten PC ${{ github.ref_name }}. Unduh AsistenPC-windows.zip, ekstrak, lalu jalankan AsistenPC.exe."

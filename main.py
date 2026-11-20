@@ -100,7 +100,7 @@ def main():
     import tkinter as tk
     from wa.gui import App
     root = tk.Tk()
-    App(root, cfg, memory, llm, make_agent)
+    App(root, cfg, memory, llm, make_agent, config_path=args.config, base_dir=BASE)
     root.mainloop()
     return 0
 

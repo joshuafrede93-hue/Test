@@ -87,3 +87,21 @@ python main.py --cli "buka notepad"
 - `wa/llm.py`: klien server model lokal
 - `wa/gui.py`: jendela aplikasi
 - `tests/`: tes otomatis (`python -m unittest discover -s tests`)
+
+## Setup otomatis LM Studio (baru di 0.2.0)
+
+Tekan **Setup otomatis**. Aplikasi akan, dengan izin Anda di setiap langkah besar:
+
+1. memasang LM Studio lewat winget bila belum ada, lalu membukanya sekali agar perintah `lms` siap;
+2. memilih model sesuai RAM (16 GB: Qwen3 14B Q4, 12 GB: Qwen3 8B, 8 GB: Qwen3 4B) dan mengunduhnya;
+3. memuat model (konteks 8192), menyalakan server di `http://localhost:1234`;
+4. mengetes jawaban model, lalu menulis `base_url`, `max_tokens` (min 1500) dan `timeout` (min 600) ke `config.json`.
+
+Jika server belum menyala saat aplikasi dibuka, aplikasi menawarkan setup ini sendiri.
+
+## Update dari pengembang
+
+Saat dibuka (dan lewat tombol **Cek update**) aplikasi memeriksa GitHub Releases repo
+`joshuafrede93-hue/Test` untuk tag `asistenpc-v*`. Bila ada versi lebih baru, Anda ditanya dulu;
+setelah setuju aplikasi mengunduh, menutup diri, mengganti berkas program, dan membuka lagi.
+`config.json` dan folder `data` (memori, skill, log) tidak ditimpa.

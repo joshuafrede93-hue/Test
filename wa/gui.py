@@ -3,8 +3,13 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, simpledialog
 
-from . import APP_TITLE
+import os
+import sys
+
+from . import APP_TITLE, __version__
 from .core import UI
+from . import updater
+from .lmstudio_setup import Setup, SetupError
 
 
 class GuiBridge(UI):
@@ -37,8 +42,12 @@ class GuiBridge(UI):
 
 
 class App:
-    def __init__(self, root, cfg, memory, llm, make_agent):
+    def __init__(self, root, cfg, memory, llm, make_agent, config_path="config.json", base_dir=".", auto_checks=True):
         self.root = root
+        self.config_path = config_path
+        self.base_dir = base_dir
+        self.busy_setup = False
+        self.agent_running = False
         self.cfg = cfg
         self.memory = memory
         self.llm = llm
@@ -51,7 +60,7 @@ class App:
         self.current_goal = ""
 
         root.title(APP_TITLE)
-        root.geometry("560x520")
+        root.geometry("760x520")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         top = tk.Frame(root)
@@ -75,10 +84,15 @@ class App:
         tk.Button(bottom, text="Skill tersimpan", command=self.show_skills).pack(side="left", padx=6)
         tk.Button(bottom, text="Fakta tentang saya", command=self.add_fact).pack(side="left")
         tk.Button(bottom, text="Tes koneksi model", command=self.test_model).pack(side="left", padx=6)
+        tk.Button(bottom, text="Setup otomatis", command=self.start_setup).pack(side="left")
+        tk.Button(bottom, text="Cek update", command=lambda: self.check_update(manual=True)).pack(side="left", padx=6)
 
         self._setup_hotkey()
-        self.write("Siap. Tulis tugas lalu tekan Jalankan. Saat AI bekerja, jendela ini mengecil; tekan F12 untuk berhenti.")
+        self.write("Asisten PC versi %s. Tulis tugas lalu tekan Jalankan. Saat AI bekerja, jendela ini mengecil; "
+                   "tekan F12 untuk berhenti." % __version__)
         self.root.after(100, self._poll)
+        if auto_checks:
+            self.root.after(1500, self._startup_checks)
 
     # ---------- util tampilan ----------
     def write(self, msg):
@@ -123,6 +137,10 @@ class App:
         goal = self.goal_var.get().strip()
         if not goal or (self.worker and self.worker.is_alive()):
             return
+        if self.busy_setup:
+            self.write("Setup otomatis masih berjalan. Tunggu sampai selesai.")
+            return
+        self.agent_running = True
         self.current_goal = goal
         self.stop_event.clear()
         self.run_btn.configure(state="disabled")
@@ -163,6 +181,8 @@ class App:
                     self._dialog_ask(*item[1:])
                 elif kind == "finished":
                     self._finished(item[1])
+                elif kind == "call":
+                    item[1]()
         except queue.Empty:
             pass
         self.root.after(100, self._poll)
@@ -175,7 +195,8 @@ class App:
 
     def _release_front(self):
         self.root.attributes("-topmost", False)
-        self.root.iconify()
+        if self.agent_running:
+            self.root.iconify()
 
     def _dialog_confirm(self, text, ev, holder):
         self._bring_front()
@@ -194,6 +215,7 @@ class App:
         ev.set()
 
     def _finished(self, result):
+        self.agent_running = False
         self._close_overlay()
         self.root.deiconify()
         self.root.lift()
@@ -275,6 +297,77 @@ class App:
             self.write("Server model terhubung. Model: " + info)
         else:
             self.write("Server model TIDAK terhubung: %s" % info)
+
+    # ---------- setup LM Studio ----------
+    def _startup_checks(self):
+        threading.Thread(target=self._startup_worker, daemon=True).start()
+
+    def _startup_worker(self):
+        bridge = GuiBridge(self.q, self.stop_event)
+        self._check_update_worker(bridge, manual=False)
+        ok, _info = self.llm.ping()
+        if not ok:
+            bridge.log("Server model belum menyala.")
+            if bridge.confirm("Server model (LM Studio) belum menyala.\n\nJalankan Setup otomatis sekarang? "
+                              "Aplikasi akan memasang/menyalakan LM Studio dan menyiapkan model."):
+                self._setup_worker(bridge)
+
+    def start_setup(self):
+        if self.busy_setup or self.agent_running:
+            return
+        threading.Thread(target=self._setup_worker, args=(GuiBridge(self.q, self.stop_event),), daemon=True).start()
+
+    def _setup_worker(self, bridge):
+        if self.busy_setup:
+            return
+        self.busy_setup = True
+        self.stop_event.clear()
+        try:
+            wiz = Setup(bridge, self.llm, self.llm.cfg, self.config_path)
+            try:
+                bridge.log(wiz.run_all())
+            except SetupError as e:
+                bridge.log("Setup berhenti: %s" % e)
+            except Exception as e:
+                bridge.log("Setup gagal tak terduga: %s" % e)
+        finally:
+            self.busy_setup = False
+
+    # ---------- update ----------
+    def check_update(self, manual=False):
+        threading.Thread(target=self._check_update_worker,
+                         args=(GuiBridge(self.q, self.stop_event), manual), daemon=True).start()
+
+    def _check_update_worker(self, bridge, manual):
+        info = updater.check_for_update(__version__)
+        if not info:
+            if manual:
+                bridge.log("Tidak ada update. Versi %s sudah yang terbaru (atau internet tidak terjangkau)." % __version__)
+            return
+        bridge.log("Update tersedia: versi %s (sekarang %s)." % (info["version"], __version__))
+        notes = (info.get("notes") or "")[:400]
+        if not bridge.confirm("Update Asisten PC versi %s tersedia.\n\n%s\n\nPasang sekarang? Aplikasi akan "
+                              "menutup sendiri lalu terbuka lagi. Pengaturan, skill, dan memori Anda tetap aman."
+                              % (info["version"], notes)):
+            return
+        try:
+            bridge.log("Mengunduh update...")
+            last = [0]
+
+            def prog(got, total):
+                pct = int(got * 100 / total)
+                if pct >= last[0] + 20:
+                    last[0] = pct
+                    bridge.log("Unduh %d%%" % pct)
+
+            updater.prepare_and_swap(info, self.base_dir, os.path.join(self.base_dir, "data", "update"), prog)
+        except Exception as e:
+            bridge.log("Update gagal: %s" % e)
+            if info.get("page"):
+                bridge.log("Unduh manual di: %s" % info["page"])
+            return
+        bridge.log("Update siap. Menutup aplikasi untuk memasang...")
+        self.q.put(("call", self._on_close))
 
     def _on_close(self):
         self.stop_event.set()
