@@ -1,7 +1,8 @@
 import queue
 import threading
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, simpledialog
+
+import customtkinter as ctk
 
 import os
 import sys
@@ -41,6 +42,57 @@ class GuiBridge(UI):
         return self.stop_event.is_set()
 
 
+PALETTE = {
+    "bg": "#0f1115", "panel": "#171a21", "card": "#1e222b", "line": "#2a2f3a",
+    "text": "#e6e8ee", "muted": "#8b93a7", "accent": "#4f8cff", "accent_hover": "#3b76e6",
+    "ok": "#34d399", "warn": "#fbbf24", "bad": "#f87171",
+}
+FONT = "Segoe UI"
+
+
+class Dialog(ctk.CTkToplevel):
+    """Dialog modern: tanya ya/tidak atau isian teks."""
+
+    def __init__(self, parent, title, text, kind="yesno", initial="", yes="Ya", no="Tidak"):
+        super().__init__(parent)
+        self.result = None
+        self.title(title)
+        self.configure(fg_color=PALETTE["panel"])
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        ctk.CTkLabel(self, text=text, justify="left", wraplength=420, font=(FONT, 13),
+                     text_color=PALETTE["text"]).pack(padx=22, pady=(20, 12), anchor="w")
+        self.entry = None
+        if kind == "text":
+            self.entry = ctk.CTkEntry(self, width=420, height=36, font=(FONT, 13))
+            self.entry.insert(0, initial)
+            self.entry.pack(padx=22, pady=(0, 12))
+            self.entry.focus_set()
+            self.entry.bind("<Return>", lambda e: self._ok())
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(padx=22, pady=(4, 18), anchor="e")
+        ctk.CTkButton(row, text=no if kind == "yesno" else "Batal", width=96, height=34, corner_radius=10,
+                      fg_color=PALETTE["card"], hover_color=PALETTE["line"], command=self._cancel).pack(side="left", padx=6)
+        ctk.CTkButton(row, text=yes if kind == "yesno" else "OK", width=96, height=34, corner_radius=10,
+                      fg_color=PALETTE["accent"], hover_color=PALETTE["accent_hover"], command=self._ok).pack(side="left")
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - w) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - h) // 3)
+        self.geometry("+%d+%d" % (max(0, x), max(0, y)))
+        self.after(50, self.grab_set)
+        self.kind = kind
+
+    def _ok(self):
+        self.result = True if self.kind == "yesno" else (self.entry.get() if self.entry else "")
+        self.destroy()
+
+    def _cancel(self):
+        self.result = False if self.kind == "yesno" else None
+        self.destroy()
+
+
 class App:
     def __init__(self, root, cfg, memory, llm, make_agent, config_path="config.json", base_dir=".", auto_checks=True):
         self.root = root
@@ -59,49 +111,116 @@ class App:
         self.overlay_label = None
         self.current_goal = ""
 
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
         root.title(APP_TITLE)
-        root.geometry("760x520")
+        root.geometry("980x640")
+        root.minsize(820, 520)
+        root.configure(fg_color=PALETTE["bg"])
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+        root.grid_columnconfigure(1, weight=1)
+        root.grid_rowconfigure(0, weight=1)
 
-        top = tk.Frame(root)
-        top.pack(fill="x", padx=8, pady=8)
-        tk.Label(top, text="Tugas:").pack(side="left")
+        # ----- sidebar -----
+        side = ctk.CTkFrame(root, width=230, corner_radius=0, fg_color=PALETTE["panel"])
+        side.grid(row=0, column=0, sticky="nsw")
+        side.grid_propagate(False)
+        ctk.CTkLabel(side, text="Asisten PC", font=(FONT, 22, "bold"), text_color=PALETTE["text"]).pack(
+            anchor="w", padx=20, pady=(24, 0))
+        ctk.CTkLabel(side, text="Versi %s" % __version__, font=(FONT, 12), text_color=PALETTE["muted"]).pack(
+            anchor="w", padx=20, pady=(0, 18))
+        self.status_chip = ctk.CTkLabel(side, text="  Memeriksa model...  ", font=(FONT, 12), corner_radius=12,
+                                        fg_color=PALETTE["card"], text_color=PALETTE["muted"])
+        self.status_chip.pack(anchor="w", padx=20, pady=(0, 18))
+
+        def nav(text, cmd, primary=False):
+            ctk.CTkButton(
+                side, text=text, command=cmd, height=40, corner_radius=10, anchor="w", font=(FONT, 13),
+                fg_color=PALETTE["accent"] if primary else "transparent",
+                hover_color=PALETTE["accent_hover"] if primary else PALETTE["card"],
+                text_color="white" if primary else PALETTE["text"]).pack(fill="x", padx=14, pady=3)
+
+        nav("Setup otomatis", self.start_setup, primary=True)
+        nav("Tes koneksi model", self.test_model)
+        nav("Ajari AI", self.teach)
+        nav("Skill tersimpan", self.show_skills)
+        nav("Fakta tentang saya", self.add_fact)
+        nav("Cek update", lambda: self.check_update(manual=True))
+        ctk.CTkLabel(side, text="F12 = hentikan AI", font=(FONT, 11), text_color=PALETTE["muted"]).pack(
+            side="bottom", anchor="w", padx=20, pady=16)
+
+        # ----- area utama -----
+        main = ctk.CTkFrame(root, fg_color="transparent")
+        main.grid(row=0, column=1, sticky="nsew", padx=20, pady=18)
+        main.grid_rowconfigure(1, weight=1)
+        main.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(main, text="Apa yang ingin dikerjakan?", font=(FONT, 20, "bold"),
+                     text_color=PALETTE["text"]).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        self.log_box = ctk.CTkTextbox(main, corner_radius=14, fg_color=PALETTE["card"], border_width=1,
+                                      border_color=PALETTE["line"], font=(FONT, 13), wrap="word",
+                                      text_color=PALETTE["text"])
+        self.log_box.grid(row=1, column=0, sticky="nsew")
+        self.log_box.configure(state="disabled")
+        t = self.log_box._textbox
+        t.tag_config("task", foreground=PALETTE["accent"], font=(FONT, 13, "bold"))
+        t.tag_config("ok", foreground=PALETTE["ok"], font=(FONT, 13, "bold"))
+        t.tag_config("bad", foreground=PALETTE["bad"], font=(FONT, 13, "bold"))
+        t.tag_config("warn", foreground=PALETTE["warn"])
+        t.tag_config("muted", foreground=PALETTE["muted"])
+
+        bar = ctk.CTkFrame(main, fg_color=PALETTE["card"], corner_radius=14, border_width=1, border_color=PALETTE["line"])
+        bar.grid(row=2, column=0, sticky="ew", pady=(14, 0))
+        bar.grid_columnconfigure(0, weight=1)
         self.goal_var = tk.StringVar()
-        self.entry = tk.Entry(top, textvariable=self.goal_var)
-        self.entry.pack(side="left", fill="x", expand=True, padx=6)
+        self.entry = ctk.CTkEntry(bar, textvariable=self.goal_var, height=44, border_width=0, fg_color="transparent",
+                                  font=(FONT, 14), placeholder_text="Contoh: buka Excel dan buat tabel pemasukan dan pengeluaran")
+        self.entry.grid(row=0, column=0, sticky="ew", padx=(14, 6), pady=6)
         self.entry.bind("<Return>", lambda e: self.start())
-        self.run_btn = tk.Button(top, text="Jalankan", command=self.start)
-        self.run_btn.pack(side="left")
-        self.stop_btn = tk.Button(top, text="Stop (F12)", command=self.stop, state="disabled")
-        self.stop_btn.pack(side="left", padx=(6, 0))
-
-        self.log_box = scrolledtext.ScrolledText(root, height=20, state="disabled", wrap="word")
-        self.log_box.pack(fill="both", expand=True, padx=8)
-
-        bottom = tk.Frame(root)
-        bottom.pack(fill="x", padx=8, pady=8)
-        tk.Button(bottom, text="Ajari AI", command=self.teach).pack(side="left")
-        tk.Button(bottom, text="Skill tersimpan", command=self.show_skills).pack(side="left", padx=6)
-        tk.Button(bottom, text="Fakta tentang saya", command=self.add_fact).pack(side="left")
-        tk.Button(bottom, text="Tes koneksi model", command=self.test_model).pack(side="left", padx=6)
-        tk.Button(bottom, text="Setup otomatis", command=self.start_setup).pack(side="left")
-        tk.Button(bottom, text="Cek update", command=lambda: self.check_update(manual=True)).pack(side="left", padx=6)
+        self.stop_btn = ctk.CTkButton(bar, text="Stop", width=76, height=38, corner_radius=10, state="disabled",
+                                      fg_color=PALETTE["bad"], hover_color="#dc5a5a", command=self.stop)
+        self.stop_btn.grid(row=0, column=1, padx=4)
+        self.run_btn = ctk.CTkButton(bar, text="Jalankan", width=104, height=38, corner_radius=10,
+                                     fg_color=PALETTE["accent"], hover_color=PALETTE["accent_hover"], command=self.start)
+        self.run_btn.grid(row=0, column=2, padx=(4, 10))
 
         self._setup_hotkey()
         self.write("Asisten PC versi %s. Tulis tugas lalu tekan Jalankan. Saat AI bekerja, jendela ini mengecil; "
-                   "tekan F12 untuk berhenti." % __version__)
+                   "tekan F12 untuk berhenti." % __version__, "muted")
         self.root.after(100, self._poll)
+        self.root.after(300, self._refresh_status)
         if auto_checks:
             self.root.after(1500, self._startup_checks)
 
     # ---------- util tampilan ----------
-    def write(self, msg):
+    def write(self, msg, tag=None):
+        if tag is None:
+            low = msg.lower()
+            if msg.startswith("== Tugas") or msg.startswith("== Setup"):
+                tag = "task"
+            elif msg.startswith("== SELESAI") or low.startswith("setup selesai") or "terhubung. model" in low:
+                tag = "ok"
+            elif msg.startswith("== GAGAL") or "gagal" in low[:40] or "tidak terhubung" in low:
+                tag = "bad"
+            elif low.startswith(("update tersedia", "catatan", "setup berhenti")):
+                tag = "warn"
         self.log_box.configure(state="normal")
-        self.log_box.insert("end", msg + "\n")
+        self.log_box.insert("end", msg + "\n", tag) if tag else self.log_box.insert("end", msg + "\n")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
         if self.overlay_label is not None:
-            self.overlay_label.configure(text=msg[:70])
+            self.overlay_label.configure(text=msg[:60])
+
+    def _set_status(self, ok, text):
+        self.status_chip.configure(text="  %s  " % text, text_color=PALETTE["ok"] if ok else PALETTE["bad"])
+
+    def _refresh_status(self):
+        def work():
+            ok, info = self.llm.ping()
+            label = ("Model siap" if ok and "belum ada model" not in info else
+                     "Model belum dimuat" if ok else "Model offline")
+            self.q.put(("call", lambda: self._set_status(ok and "belum ada model" not in info, label)))
+        threading.Thread(target=work, daemon=True).start()
 
     def _setup_hotkey(self):
         key = self.cfg["agent"].get("stop_hotkey", "f12")
@@ -109,21 +228,21 @@ class App:
             import keyboard
             keyboard.add_hotkey(key, self.stop_event.set)
         except Exception as e:
-            self.write("Catatan: tombol darurat %s tidak aktif (%s). Gunakan tombol Stop." % (key.upper(), e))
+            self.write("Catatan: tombol darurat %s tidak aktif (%s). Gunakan tombol Stop." % (key.upper(), e), "warn")
 
     def _make_overlay(self):
-        ov = tk.Toplevel(self.root)
+        ov = ctk.CTkToplevel(self.root)
         ov.overrideredirect(True)
         ov.attributes("-topmost", True)
-        w, h = 380, 64
+        ov.configure(fg_color=PALETTE["panel"])
+        w, h = 400, 70
         x = ov.winfo_screenwidth() - w - 20
         y = ov.winfo_screenheight() - h - 70
         ov.geometry("%dx%d+%d+%d" % (w, h, x, y))
-        frame = tk.Frame(ov, bg="#1f2937")
-        frame.pack(fill="both", expand=True)
-        tk.Label(frame, text="AI sedang bekerja. F12 = berhenti", fg="#fbbf24", bg="#1f2937").pack(anchor="w", padx=8, pady=(6, 0))
-        self.overlay_label = tk.Label(frame, text="", fg="white", bg="#1f2937", anchor="w")
-        self.overlay_label.pack(fill="x", padx=8)
+        ctk.CTkLabel(ov, text="AI sedang bekerja  -  F12 untuk berhenti", font=(FONT, 12, "bold"),
+                     text_color=PALETTE["warn"]).pack(anchor="w", padx=14, pady=(10, 0))
+        self.overlay_label = ctk.CTkLabel(ov, text="", font=(FONT, 12), text_color=PALETTE["text"], anchor="w")
+        self.overlay_label.pack(fill="x", padx=14)
         self.overlay = ov
 
     def _close_overlay(self):
@@ -131,6 +250,17 @@ class App:
             self.overlay.destroy()
         self.overlay = None
         self.overlay_label = None
+
+    # ---------- dialog ----------
+    def _yesno(self, text, title=None):
+        d = Dialog(self.root, title or APP_TITLE, text, "yesno")
+        self.root.wait_window(d)
+        return bool(d.result)
+
+    def _text(self, text, initial="", title=None):
+        d = Dialog(self.root, title or APP_TITLE, text, "text", initial)
+        self.root.wait_window(d)
+        return d.result
 
     # ---------- jalankan tugas ----------
     def start(self):
@@ -204,13 +334,13 @@ class App:
             self.root.bell()
         except Exception:
             pass
-        holder[0] = messagebox.askyesno(APP_TITLE + ": konfirmasi", text, parent=self.root)
+        holder[0] = self._yesno(text, APP_TITLE + ": konfirmasi")
         self._release_front()
         ev.set()
 
     def _dialog_ask(self, text, ev, holder):
         self._bring_front()
-        holder[0] = simpledialog.askstring(APP_TITLE + ": AI bertanya", text, parent=self.root)
+        holder[0] = self._text(text, "", APP_TITLE + ": AI bertanya")
         self._release_front()
         ev.set()
 
@@ -224,54 +354,68 @@ class App:
         labels = {"done": "SELESAI", "failed": "GAGAL", "stopped": "DIHENTIKAN", "max_steps": "BATAS LANGKAH"}
         self.write("== %s: %s" % (labels.get(result.status, result.status), result.summary))
         if result.status == "done" and result.executed:
-            name = simpledialog.askstring(
-                APP_TITLE,
+            name = self._text(
                 "Tugas selesai. Simpan langkah-langkahnya sebagai skill?\n"
                 "Skill bisa diputar ulang tanpa AI (lebih cepat).\n\n"
-                "Isi nama skill, atau kosongkan untuk tidak menyimpan:",
-                initialvalue=self.current_goal[:40], parent=self.root)
+                "Isi nama skill, atau kosongkan untuk tidak menyimpan:", self.current_goal[:40])
             if name and self.memory.save_skill(name, self.current_goal, result.executed):
                 self.write('Skill "%s" tersimpan (%d langkah).' % (name, len(result.executed)))
 
     # ---------- memori ----------
     def teach(self):
-        text = simpledialog.askstring(
-            APP_TITLE,
-            "Ajari AI satu pelajaran singkat. Contoh:\n"
-            "Di Excel, menu Save As ada di File > Save a Copy.\n\n"
-            "Jangan tulis sandi atau data pribadi.", parent=self.root)
+        text = self._text("Ajari AI satu pelajaran singkat. Contoh:\n"
+                          "Di Excel, menu Save As ada di File > Save a Copy.\n\n"
+                          "Jangan tulis sandi atau data pribadi.")
         if not text:
             return
-        app = simpledialog.askstring(APP_TITLE, "Berlaku untuk aplikasi apa? (misal Excel; kosongkan untuk semua)",
-                                     parent=self.root) or ""
+        app = self._text("Berlaku untuk aplikasi apa? (misal Excel; kosongkan untuk semua)") or ""
         if self.memory.add_lesson(text, app=app, source="user"):
-            self.write("Pelajaran tersimpan.")
+            self.write("Pelajaran tersimpan.", "ok")
         else:
-            self.write("Pelajaran tidak disimpan (sudah ada, terlalu pendek, atau mengandung data sensitif).")
+            self.write("Pelajaran tidak disimpan (sudah ada, terlalu pendek, atau mengandung data sensitif).", "warn")
 
     def add_fact(self):
-        text = simpledialog.askstring(
-            APP_TITLE, "Tulis fakta dengan format  kunci=nilai\nContoh: folder_kerja=D:\\Kerja", parent=self.root)
+        text = self._text("Tulis fakta dengan format  kunci=nilai\nContoh: folder_kerja=D:\\Kerja")
         if not text or "=" not in text:
             return
         key, value = text.split("=", 1)
         if self.memory.set_fact(key, value):
-            self.write("Fakta tersimpan: %s" % key.strip())
+            self.write("Fakta tersimpan: %s" % key.strip(), "ok")
         else:
-            self.write("Fakta tidak disimpan (kosong atau mengandung data sensitif).")
+            self.write("Fakta tidak disimpan (kosong atau mengandung data sensitif).", "warn")
 
     def show_skills(self):
-        win = tk.Toplevel(self.root)
+        win = ctk.CTkToplevel(self.root)
         win.title("Skill tersimpan")
-        lb = tk.Listbox(win, width=60, height=12)
-        lb.pack(fill="both", expand=True, padx=8, pady=8)
+        win.geometry("520x420")
+        win.configure(fg_color=PALETTE["panel"])
+        win.attributes("-topmost", True)
+        ctk.CTkLabel(win, text="Skill tersimpan", font=(FONT, 18, "bold")).pack(anchor="w", padx=18, pady=(16, 6))
         skills = self.memory.list_skills()
-        for s in skills:
-            lb.insert("end", "%s  (%d langkah, berhasil %d/%d)" % (s["name"], len(s["steps"]), s.get("ok_runs", 0), s.get("runs", 0)))
+        chosen = {"i": None}
+        box = ctk.CTkScrollableFrame(win, fg_color=PALETTE["card"], corner_radius=12)
+        box.pack(fill="both", expand=True, padx=18, pady=6)
+        btns = []
+
+        def pick(i):
+            chosen["i"] = i
+            for k, b in enumerate(btns):
+                b.configure(fg_color=PALETTE["accent"] if k == i else "transparent")
+
+        if not skills:
+            ctk.CTkLabel(box, text="Belum ada skill. Selesaikan tugas lalu simpan sebagai skill.",
+                         text_color=PALETTE["muted"]).pack(padx=10, pady=20)
+        for i, s in enumerate(skills):
+            b = ctk.CTkButton(box, anchor="w", height=38, corner_radius=8, fg_color="transparent",
+                              hover_color=PALETTE["line"], font=(FONT, 13),
+                              text="%s   (%d langkah, berhasil %d/%d)" % (
+                                  s["name"], len(s["steps"]), s.get("ok_runs", 0), s.get("runs", 0)),
+                              command=lambda i=i: pick(i))
+            b.pack(fill="x", pady=2)
+            btns.append(b)
 
         def selected():
-            sel = lb.curselection()
-            return skills[sel[0]] if sel else None
+            return skills[chosen["i"]] if chosen["i"] is not None else None
 
         def run_it():
             s = selected()
@@ -282,21 +426,26 @@ class App:
 
         def delete_it():
             s = selected()
-            if s and messagebox.askyesno(APP_TITLE, 'Hapus skill "%s"?' % s["name"], parent=win):
+            if s and self._yesno('Hapus skill "%s"?' % s["name"]):
                 self.memory.delete_skill(s["name"])
                 win.destroy()
 
-        row = tk.Frame(win)
-        row.pack(pady=(0, 8))
-        tk.Button(row, text="Jalankan", command=run_it).pack(side="left", padx=4)
-        tk.Button(row, text="Hapus", command=delete_it).pack(side="left", padx=4)
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(anchor="e", padx=18, pady=(6, 16))
+        ctk.CTkButton(row, text="Hapus", width=90, height=34, corner_radius=10, fg_color=PALETTE["card"],
+                      hover_color=PALETTE["bad"], command=delete_it).pack(side="left", padx=6)
+        ctk.CTkButton(row, text="Jalankan", width=110, height=34, corner_radius=10, fg_color=PALETTE["accent"],
+                      hover_color=PALETTE["accent_hover"], command=run_it).pack(side="left")
 
     def test_model(self):
         ok, info = self.llm.ping()
         if ok:
-            self.write("Server model terhubung. Model: " + info)
+            self.write("Server model terhubung. Model: " + info, "ok")
         else:
-            self.write("Server model TIDAK terhubung: %s" % info)
+            self.write("Server model TIDAK terhubung: %s" % info, "bad")
+        self._set_status(ok and "belum ada model" not in info,
+                         "Model siap" if ok and "belum ada model" not in info else
+                         "Model belum dimuat" if ok else "Model offline")
 
     # ---------- setup LM Studio ----------
     def _startup_checks(self):

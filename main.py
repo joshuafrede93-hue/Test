@@ -97,9 +97,9 @@ def main():
         print("\n%s: %s" % (result.status.upper(), result.summary))
         return 0 if result.status == "done" else 2
 
-    import tkinter as tk
+    import customtkinter as ctk
     from wa.gui import App
-    root = tk.Tk()
+    root = ctk.CTk()
     App(root, cfg, memory, llm, make_agent, config_path=args.config, base_dir=BASE)
     root.mainloop()
     return 0

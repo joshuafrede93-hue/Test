@@ -20,8 +20,10 @@ jobs:
         run: pip install -r requirements.txt pyinstaller
       - name: Tes logika
         run: python -m unittest discover -s tests
+      - name: Uji tampilan
+        run: python tests/smoke_gui.py
       - name: Bangun exe
-        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard main.py
+        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-all customtkinter --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard main.py
       - name: Siapkan folder hasil
         shell: pwsh
         run: |
