@@ -1,0 +1,6 @@
+pyautogui
+pywinauto
+pyperclip
+mss
+Pillow
+keyboard

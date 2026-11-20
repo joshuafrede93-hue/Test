@@ -1,0 +1,30 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pasang library
+        run: pip install -r requirements.txt pyinstaller
+      - name: Tes logika
+        run: python -m unittest discover -s tests
+      - name: Bangun exe
+        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard main.py
+      - name: Siapkan folder hasil
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/AsistenPC/data | Out-Null
+          Copy-Item config.json dist/AsistenPC/config.json
+          Copy-Item README.md dist/AsistenPC/README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AsistenPC-windows
+          path: dist/AsistenPC

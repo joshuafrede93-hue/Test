@@ -1,0 +1,25 @@
+{
+  "llm": {
+    "base_url": "http://localhost:1234/v1",
+    "model": "",
+    "api_key": "local",
+    "temperature": 0.1,
+    "max_tokens": 400,
+    "timeout": 240,
+    "use_vision": false,
+    "vision_max_width": 1024
+  },
+  "agent": {
+    "max_steps": 25,
+    "step_delay": 0.8,
+    "max_elements": 70,
+    "history_window": 8,
+    "auto_reflect": true,
+    "stop_hotkey": "f12",
+    "skill_match_threshold": 0.6
+  },
+  "safety": {
+    "extra_risky_words": [],
+    "confirm_every_action": false
+  }
+}
