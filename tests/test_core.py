@@ -25,7 +25,7 @@ class FakeLLM:
         self.replies = list(replies)
         self.calls = 0
 
-    def chat(self, messages, image_b64=None):
+    def chat(self, messages, image_b64=None, **kw):
         self.calls += 1
         if not self.replies:
             raise AssertionError("LLM dipanggil lebih banyak dari yang diharapkan")
@@ -230,6 +230,8 @@ class TestAgent(unittest.TestCase):
             env = FakeEnv([obs("Book1 - Excel", ("Save", "Button"))])
             llm = FakeLLM([
                 J(action="click", id=1),
+                J(action="wait", seconds=0),
+                J(action="press", key="enter"),
                 J(action="done", summary="ok"),
                 json.dumps({"lessons": ["Di Excel tombol Save ada di pojok kiri atas", "pendek"]}),
             ])
@@ -237,6 +239,14 @@ class TestAgent(unittest.TestCase):
             self.assertEqual(agent.run("simpan excel").status, "done")
             self.assertEqual(len(agent.memory.lessons), 1)
             self.assertEqual(agent.memory.lessons[0]["app"], "Excel")
+
+    def test_short_task_skips_reflection(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = FakeEnv([obs("Book1 - Excel", ("Save", "Button"))])
+            llm = FakeLLM([J(action="click", id=1), J(action="done", summary="ok")])
+            agent, _ = make_agent(llm, env, ScriptedUI(), d, auto_reflect=True)
+            self.assertEqual(agent.run("simpan excel").status, "done")
+            self.assertEqual(llm.calls, 2)  # tanpa panggilan refleksi
 
     def test_skill_replay_without_llm(self):
         with tempfile.TemporaryDirectory() as d:

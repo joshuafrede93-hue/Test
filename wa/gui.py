@@ -7,9 +7,10 @@ import customtkinter as ctk
 import os
 import sys
 
-from . import APP_TITLE, __version__
+from . import APP_TITLE, __version__, winui
 from .core import UI
 from .lmstudio_setup import Setup, SetupError
+from .voice import Listener, VoiceError
 
 
 class GuiBridge(UI):
@@ -49,24 +50,55 @@ PALETTE = {
 FONT = "Segoe UI"
 
 
-class Dialog(ctk.CTkToplevel):
-    """Dialog modern: tanya ya/tidak atau isian teks."""
+class Tooltip:
+    """Keterangan kecil saat kursor di atas tombol ikon."""
 
-    def __init__(self, parent, title, text, kind="yesno", initial="", yes="Ya", no="Tidak"):
+    def __init__(self, widget, text):
+        self.widget, self.text, self.tip = widget, text, None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _e=None):
+        if self.tip is not None:
+            return
+        tip = tk.Toplevel(self.widget)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tk.Label(tip, text=self.text, bg="#2a2f3a", fg="#e6e8ee", padx=8, pady=4, font=(FONT, 10)).pack()
+        x = self.widget.winfo_rootx()
+        y = self.widget.winfo_rooty() - 34
+        tip.geometry("+%d+%d" % (x, max(0, y)))
+        self.tip = tip
+
+    def _hide(self, _e=None):
+        if self.tip is not None:
+            self.tip.destroy()
+            self.tip = None
+
+
+class Dialog(ctk.CTkToplevel):
+    """Dialog modern: tanya ya/tidak atau isian teks. Muncul sendiri di paling depan layar."""
+
+    def __init__(self, parent, title, text, kind="yesno", initial="", yes="Ya", no="Tidak", header=None):
         super().__init__(parent)
         self.result = None
+        self.kind = kind
         self.title(title)
         self.configure(fg_color=PALETTE["panel"])
         self.resizable(False, False)
         self.attributes("-topmost", True)
+        if header:
+            bar = ctk.CTkFrame(self, fg_color=PALETTE["warn"], corner_radius=0, height=34)
+            bar.pack(fill="x")
+            ctk.CTkLabel(bar, text=header, font=(FONT, 13, "bold"), text_color="#1b1b1b").pack(
+                side="left", padx=18, pady=5)
         ctk.CTkLabel(self, text=text, justify="left", wraplength=420, font=(FONT, 13),
-                     text_color=PALETTE["text"]).pack(padx=22, pady=(20, 12), anchor="w")
+                     text_color=PALETTE["text"]).pack(padx=22, pady=(18, 12), anchor="w")
         self.entry = None
         if kind == "text":
             self.entry = ctk.CTkEntry(self, width=420, height=36, font=(FONT, 13))
             self.entry.insert(0, initial)
             self.entry.pack(padx=22, pady=(0, 12))
-            self.entry.focus_set()
             self.entry.bind("<Return>", lambda e: self._ok())
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(padx=22, pady=(4, 18), anchor="e")
@@ -77,11 +109,35 @@ class Dialog(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.update_idletasks()
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
-        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - w) // 2)
-        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - h) // 3)
+        # Tengah layar (bukan tengah jendela utama, yang mungkin sedang diciutkan).
+        x = (self.winfo_screenwidth() - w) // 2
+        y = (self.winfo_screenheight() - h) // 3
         self.geometry("+%d+%d" % (max(0, x), max(0, y)))
-        self.after(50, self.grab_set)
-        self.kind = kind
+        # CTkToplevel baru siap sesaat setelah dibuat; dorong ke depan beberapa kali sampai benar-benar terlihat.
+        for ms in (30, 250, 700):
+            self.after(ms, self._front)
+        self.after(60, self._grab)
+
+    def _front(self):
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            winui.force_foreground(self)
+            winui.flash(self)
+            self.focus_force()
+            if self.entry is not None:
+                self.entry.focus_set()
+            if not self.winfo_viewable():  # cadangan: kalau tetap tersembunyi, tampilkan jendela utama
+                self.master.deiconify()
+        except tk.TclError:
+            pass
+
+    def _grab(self):
+        try:
+            self.grab_set()
+        except tk.TclError:
+            self.after(100, self._grab)
 
     def _ok(self):
         self.result = True if self.kind == "yesno" else (self.entry.get() if self.entry else "")
@@ -108,7 +164,11 @@ class App:
         self.worker = None
         self.overlay = None
         self.overlay_label = None
+        self.overlay_title = None
         self.current_goal = ""
+        self.listening = False
+        self.voice_noted = False
+        self.voice_cfg = cfg.get("voice", {})
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -144,8 +204,8 @@ class App:
         nav("Ajari AI", self.teach)
         nav("Skill tersimpan", self.show_skills)
         nav("Fakta tentang saya", self.add_fact)
-        ctk.CTkLabel(side, text="F12 = hentikan AI", font=(FONT, 11), text_color=PALETTE["muted"]).pack(
-            side="bottom", anchor="w", padx=20, pady=16)
+        ctk.CTkLabel(side, text="F9 = perintah suara\nF12 = hentikan AI", font=(FONT, 11), justify="left",
+                     text_color=PALETTE["muted"]).pack(side="bottom", anchor="w", padx=20, pady=16)
 
         # ----- area utama -----
         main = ctk.CTkFrame(root, fg_color="transparent")
@@ -175,16 +235,30 @@ class App:
                                   font=(FONT, 14), placeholder_text="Contoh: buka Excel dan buat tabel pemasukan dan pengeluaran")
         self.entry.grid(row=0, column=0, sticky="ew", padx=(14, 6), pady=6)
         self.entry.bind("<Return>", lambda e: self.start())
-        self.stop_btn = ctk.CTkButton(bar, text="Stop", width=76, height=38, corner_radius=10, state="disabled",
-                                      fg_color=PALETTE["bad"], hover_color="#dc5a5a", command=self.stop)
-        self.stop_btn.grid(row=0, column=1, padx=4)
-        self.run_btn = ctk.CTkButton(bar, text="Jalankan", width=104, height=38, corner_radius=10,
+        from .icons import make_icon
+
+        def icon(name, color="#ffffff"):
+            img = make_icon(name, color, 64)
+            return ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+
+        self.icon_mic, self.icon_mic_on = icon("mic", PALETTE["muted"]), icon("mic", "#ffffff")
+        self.mic_btn = ctk.CTkButton(bar, text="", image=self.icon_mic, width=40, height=40, corner_radius=10,
+                                     fg_color=PALETTE["panel"], hover_color=PALETTE["line"], command=self.toggle_voice)
+        self.mic_btn.grid(row=0, column=1, padx=(2, 4))
+        self.stop_btn = ctk.CTkButton(bar, text="", image=icon("stop"), width=40, height=40, corner_radius=10,
+                                      state="disabled", fg_color=PALETTE["bad"], hover_color="#dc5a5a",
+                                      command=self.stop)
+        self.stop_btn.grid(row=0, column=2, padx=4)
+        self.run_btn = ctk.CTkButton(bar, text="", image=icon("play"), width=40, height=40, corner_radius=10,
                                      fg_color=PALETTE["accent"], hover_color=PALETTE["accent_hover"], command=self.start)
-        self.run_btn.grid(row=0, column=2, padx=(4, 10))
+        self.run_btn.grid(row=0, column=3, padx=(4, 10))
+        Tooltip(self.mic_btn, "Perintah suara (F9)")
+        Tooltip(self.stop_btn, "Hentikan (F12)")
+        Tooltip(self.run_btn, "Jalankan (Enter)")
 
         self._setup_hotkey()
-        self.write("Asisten PC versi %s. Tulis tugas lalu tekan Jalankan. Saat AI bekerja, jendela ini mengecil; "
-                   "tekan F12 untuk berhenti." % __version__, "muted")
+        self.write("Asisten PC versi %s. Tulis atau ucapkan tugas (tombol mikrofon / F9), lalu jalankan. "
+                   "Saat AI bekerja, jendela ini mengecil; tekan F12 untuk berhenti." % __version__, "muted")
         self.root.after(100, self._poll)
         self.root.after(300, self._refresh_status)
         if auto_checks:
@@ -227,8 +301,18 @@ class App:
             keyboard.add_hotkey(key, self.stop_event.set)
         except Exception as e:
             self.write("Catatan: tombol darurat %s tidak aktif (%s). Gunakan tombol Stop." % (key.upper(), e), "warn")
+            return
+        vkey = self.voice_cfg.get("hotkey", "f9")
+        if self.voice_cfg.get("enabled", True) and vkey:
+            try:
+                # Dipanggil dari thread lain: lewat antrian agar aman bagi Tkinter.
+                keyboard.add_hotkey(vkey, lambda: self.q.put(("call", self.toggle_voice)))
+            except Exception:
+                pass
 
-    def _make_overlay(self):
+    def _make_overlay(self, title="AI sedang bekerja  -  F12 untuk berhenti", color=None):
+        if self.overlay is not None:
+            self._close_overlay()
         ov = ctk.CTkToplevel(self.root)
         ov.overrideredirect(True)
         ov.attributes("-topmost", True)
@@ -237,8 +321,9 @@ class App:
         x = ov.winfo_screenwidth() - w - 20
         y = ov.winfo_screenheight() - h - 70
         ov.geometry("%dx%d+%d+%d" % (w, h, x, y))
-        ctk.CTkLabel(ov, text="AI sedang bekerja  -  F12 untuk berhenti", font=(FONT, 12, "bold"),
-                     text_color=PALETTE["warn"]).pack(anchor="w", padx=14, pady=(10, 0))
+        self.overlay_title = ctk.CTkLabel(ov, text=title, font=(FONT, 12, "bold"),
+                                          text_color=color or PALETTE["warn"])
+        self.overlay_title.pack(anchor="w", padx=14, pady=(10, 0))
         self.overlay_label = ctk.CTkLabel(ov, text="", font=(FONT, 12), text_color=PALETTE["text"], anchor="w")
         self.overlay_label.pack(fill="x", padx=14)
         self.overlay = ov
@@ -248,15 +333,24 @@ class App:
             self.overlay.destroy()
         self.overlay = None
         self.overlay_label = None
+        self.overlay_title = None
+
+    def _alert(self, title, body):
+        """Minta perhatian: bunyi, notifikasi Windows, dan papan kecil di pojok layar."""
+        winui.beep()
+        winui.notify(title, body)
+        if self.overlay is not None and self.overlay_title is not None:
+            self.overlay_title.configure(text=title, text_color=PALETTE["warn"])
+            self.overlay_label.configure(text=body[:60])
 
     # ---------- dialog ----------
-    def _yesno(self, text, title=None):
-        d = Dialog(self.root, title or APP_TITLE, text, "yesno")
+    def _yesno(self, text, title=None, header=None):
+        d = Dialog(self.root, title or APP_TITLE, text, "yesno", header=header)
         self.root.wait_window(d)
         return bool(d.result)
 
-    def _text(self, text, initial="", title=None):
-        d = Dialog(self.root, title or APP_TITLE, text, "text", initial)
+    def _text(self, text, initial="", title=None, header=None):
+        d = Dialog(self.root, title or APP_TITLE, text, "text", initial, header=header)
         self.root.wait_window(d)
         return d.result
 
@@ -315,32 +409,21 @@ class App:
             pass
         self.root.after(100, self._poll)
 
-    def _bring_front(self):
-        self.root.deiconify()
-        self.root.lift()
-        self.root.attributes("-topmost", True)
-        self.root.update()
-
-    def _release_front(self):
-        self.root.attributes("-topmost", False)
-        if self.agent_running:
-            self.root.iconify()
-
     def _dialog_confirm(self, text, ev, holder):
-        self._bring_front()
-        try:
-            self.root.bell()
-        except Exception:
-            pass
-        holder[0] = self._yesno(text, APP_TITLE + ": konfirmasi")
-        self._release_front()
+        self._alert("AI butuh persetujuan Anda", text.split("\n")[1] if "\n" in text else text)
+        holder[0] = self._yesno(text, APP_TITLE + ": konfirmasi", header="Butuh persetujuan Anda")
+        self._after_dialog()
         ev.set()
 
     def _dialog_ask(self, text, ev, holder):
-        self._bring_front()
-        holder[0] = self._text(text, "", APP_TITLE + ": AI bertanya")
-        self._release_front()
+        self._alert("AI bertanya kepada Anda", text)
+        holder[0] = self._text(text, "", APP_TITLE + ": AI bertanya", header="AI butuh jawaban Anda")
+        self._after_dialog()
         ev.set()
+
+    def _after_dialog(self):
+        if self.overlay is not None and self.overlay_title is not None:
+            self.overlay_title.configure(text="AI sedang bekerja  -  F12 untuk berhenti", text_color=PALETTE["warn"])
 
     def _finished(self, result):
         self.agent_running = False
@@ -351,6 +434,7 @@ class App:
         self.stop_btn.configure(state="disabled")
         labels = {"done": "SELESAI", "failed": "GAGAL", "stopped": "DIHENTIKAN", "max_steps": "BATAS LANGKAH"}
         self.write("== %s: %s" % (labels.get(result.status, result.status), result.summary))
+        winui.notify("Asisten PC: %s" % labels.get(result.status, result.status).capitalize(), result.summary)
         if result.status == "done" and result.executed:
             name = self._text(
                 "Tugas selesai. Simpan langkah-langkahnya sebagai skill?\n"
@@ -358,6 +442,68 @@ class App:
                 "Isi nama skill, atau kosongkan untuk tidak menyimpan:", self.current_goal[:40])
             if name and self.memory.save_skill(name, self.current_goal, result.executed):
                 self.write('Skill "%s" tersimpan (%d langkah).' % (name, len(result.executed)))
+
+    # ---------- suara ----------
+    def toggle_voice(self):
+        if not self.voice_cfg.get("enabled", True):
+            return
+        if self.listening:
+            self.stop_event.set()  # klik lagi / F12 = batalkan rekaman
+            return
+        if self.agent_running or self.busy_setup:
+            self.write("Perintah suara tidak bisa dipakai saat AI sedang bekerja atau setup berjalan.", "warn")
+            return
+        self.listening = True
+        self.stop_event.clear()
+        self.mic_btn.configure(image=self.icon_mic_on, fg_color=PALETTE["bad"], hover_color="#dc5a5a")
+        self.run_btn.configure(state="disabled")
+        if not self.voice_noted:
+            self.write("Catatan: suara Anda dikirim ke layanan pengenalan suara Google (butuh internet) hanya untuk "
+                       "diubah jadi teks.", "muted")
+            self.voice_noted = True
+        self.write("Mendengarkan... ucapkan perintah Anda.", "task")
+        self._make_overlay("Mendengarkan perintah suara...", PALETTE["bad"])
+        winui.beep("tick")
+        threading.Thread(target=self._voice_worker, daemon=True).start()
+
+    def _voice_worker(self):
+        text, error = "", None
+        try:
+            lst = Listener(self.voice_cfg)
+            text = lst.listen(should_stop=self._voice_stop,
+                              on_status=lambda s: self.q.put(("call", lambda: self._voice_status(s))))
+        except VoiceError as e:
+            error = str(e)
+        except Exception as e:
+            error = "Perintah suara gagal: %s" % e
+        self.q.put(("call", lambda: self._voice_done(text, error)))
+
+    def _voice_stop(self):
+        return self.stop_event.is_set()
+
+    def _voice_status(self, status):
+        if self.overlay_title is not None and status == "recognizing":
+            self.overlay_title.configure(text="Mengenali ucapan...", text_color=PALETTE["warn"])
+
+    def _voice_done(self, text, error):
+        self.listening = False
+        self.stop_event.clear()
+        self.mic_btn.configure(image=self.icon_mic, fg_color=PALETTE["panel"], hover_color=PALETTE["line"])
+        if not self.agent_running:
+            self.run_btn.configure(state="normal")
+            self._close_overlay()
+        if error:
+            self.write("Suara gagal: " + error, "bad")
+            return
+        if not text:
+            self.write("Tidak ada ucapan yang terdengar jelas. Coba lagi (klik mikrofon atau F9).", "warn")
+            return
+        self.write('Terdengar: "%s"' % text, "ok")
+        self.goal_var.set(text)
+        if self.voice_cfg.get("auto_run", True):
+            self.start()
+        else:
+            self.entry.focus_set()
 
     # ---------- memori ----------
     def teach(self):
@@ -453,6 +599,17 @@ class App:
         bridge = GuiBridge(self.q, self.stop_event)
         ok, info = self.llm.ping()
         if ok and "belum ada model" not in info:
+            if not self.llm.cfg.get("auto_switch_model", True):
+                return
+            try:
+                wiz = Setup(bridge, self.llm, self.llm.cfg, self.config_path)
+                if not wiz.needs_switch(info):
+                    return
+            except Exception:
+                return
+            bridge.log("Model yang termuat (%s) terlalu berat dan lambat untuk laptop ini. Beralih otomatis ke "
+                       "model yang lebih cepat; jika gagal, model lama tetap dipakai." % info[:60])
+            self._setup_worker(bridge)
             return
         bridge.log("Model AI belum siap. Menyiapkan otomatis (LM Studio + model), mohon tunggu...")
         self._setup_worker(bridge)

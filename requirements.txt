@@ -5,3 +5,6 @@ mss
 Pillow
 keyboard
 customtkinter
+SpeechRecognition
+sounddevice
+winotify

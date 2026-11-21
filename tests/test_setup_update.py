@@ -35,7 +35,7 @@ class FakeLLM:
     def ping(self):
         return self.pings.pop(0) if len(self.pings) > 1 else self.pings[0]
 
-    def chat(self, messages, image_b64=None):
+    def chat(self, messages, image_b64=None, **kw):
         return "siap"
 
 
@@ -48,14 +48,16 @@ class FakeLms:
         self.calls = []
         self.get_count = 0
         self.dl_urls = []
+        self.extra_models = []
 
     def __call__(self, args, timeout=120, stdin_text=None, on_line=None):
         self.calls.append(args[1:])
         cmd = args[1]
         if cmd == "ls":
-            if self.downloaded:
-                return 0, json.dumps([{"type": "llm", "modelKey": "qwen/qwen3-14b"},
-                                      {"type": "embedding", "modelKey": "nomic-embed"}])
+            keys = (["qwen/qwen3-8b"] if self.downloaded else []) + self.extra_models
+            if keys:
+                return 0, json.dumps([{"type": "llm", "modelKey": k} for k in keys]
+                                     + [{"type": "embedding", "modelKey": "nomic-embed"}])
             return 0, "[]"
         if cmd == "get":
             self.get_count += 1
@@ -91,7 +93,8 @@ def make_setup(ui, runner, ram=16.0, pings=None, tmp=None, downloader=None):
 
 class SetupTests(unittest.TestCase):
     def test_choose_model_by_ram(self):
-        self.assertIn("14B", choose_model(15.8)["label"])
+        self.assertIn("14B", choose_model(32)["label"])
+        self.assertIn("8B", choose_model(15.8)["label"])  # 16 GB: 8B jauh lebih cepat daripada 14B
         self.assertIn("8B", choose_model(12)["label"])
         self.assertIn("4B", choose_model(8)["label"])
         self.assertIn("3B", choose_model(4)["label"])
@@ -122,13 +125,14 @@ class SetupTests(unittest.TestCase):
             msg = s.run_all()
             self.assertIn("Setup selesai", msg)
             self.assertEqual(ui.asked, [])  # sepenuhnya otomatis, tanpa pertanyaan
-            self.assertTrue(runner.dl_urls[0].endswith("Qwen3-14B-Q4_K_M.gguf"))
+            self.assertTrue(runner.dl_urls[0].endswith("Qwen3-8B-Q4_K_M.gguf"))
+            self.assertIn("unload", [c[0] for c in runner.calls])  # model lama dilepas dulu
             self.assertIn("load", [c[0] for c in runner.calls])
             saved = json.load(open(path))
             self.assertEqual(saved["agent"]["max_steps"], 9)  # pengaturan lain utuh
             self.assertEqual(saved["llm"]["base_url"], "http://localhost:1234/v1")
-            self.assertGreaterEqual(saved["llm"]["max_tokens"], 1500)
-            self.assertGreaterEqual(cfg["timeout"], 600)
+            self.assertGreaterEqual(saved["llm"]["max_tokens"], 300)
+            self.assertEqual(saved["config_version"], 2)
 
     def test_skips_download_when_model_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -221,6 +225,32 @@ class SetupTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_detects_whether_preferred_model_is_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, _, _ = make_setup(FakeUI(), FakeLms(), tmp=tmp)  # RAM 16 GB -> 8B
+            self.assertTrue(s.is_preferred_loaded("qwen/qwen3-8b"))
+            self.assertTrue(s.is_preferred_loaded("qwen3-8b-q4_k_m"))
+            self.assertFalse(s.is_preferred_loaded("qwen/qwen3-14b-gguf/qwen3-14b-q4_k_m.gguf"))
+            self.assertFalse(s.is_preferred_loaded(""))
+
+    def test_needs_switch_only_for_known_other_tier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, _, _ = make_setup(FakeUI(), FakeLms(), tmp=tmp)  # pilihan: 8B
+            self.assertTrue(s.needs_switch("qwen/qwen3-14b"))
+            self.assertFalse(s.needs_switch("qwen/qwen3-8b"))
+            self.assertFalse(s.needs_switch("my-custom-model"))  # model buatan sendiri dibiarkan
+
+    def test_keeps_existing_model_when_download_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = FakeLms()
+            runner.extra_models = ["qwen/qwen3-14b-gguf/qwen3-14b-q4_k_m.gguf"]
+            def bad_dl(url, dest, prog, stop):
+                raise SetupError("tidak ada internet")
+            s, _, _ = make_setup(FakeUI(), runner, tmp=tmp, downloader=bad_dl)
+            runner.get_fails_first = True
+            key = s.ensure_model("lms.exe")
+            self.assertIn("14b", key.lower())
 
     def test_update_config_keeps_larger_values(self):
         with tempfile.TemporaryDirectory() as tmp:

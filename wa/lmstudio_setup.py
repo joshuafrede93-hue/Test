@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+from .config import CONFIG_VERSION
+
 WINGET_ID = "ElementLabs.LMStudio"
 DEFAULT_PORT = 1234
 
@@ -19,7 +21,8 @@ DEFAULT_PORT = 1234
 # nama kunci karena nama di katalog LM Studio bisa berubah; wizard mencoba berurutan.
 MODEL_TIERS = [
     # (RAM minimum GB, label, perkiraan ukuran GB, kunci `lms get` cadangan, repo Hugging Face, nama berkas)
-    (15.0, "Qwen3 14B (Q4_K_M)", 9.0, ["lmstudio-community/Qwen3-14B-GGUF"],
+    # 14B hanya untuk RAM besar: di laptop 16 GB (VRAM kecil) 14B berjalan sangat lambat, 8B jauh lebih cepat.
+    (24.0, "Qwen3 14B (Q4_K_M)", 9.0, ["lmstudio-community/Qwen3-14B-GGUF"],
      "Qwen/Qwen3-14B-GGUF", "Qwen3-14B-Q4_K_M.gguf"),
     (11.0, "Qwen3 8B (Q4_K_M)", 5.5, ["lmstudio-community/Qwen3-8B-GGUF"],
      "Qwen/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf"),
@@ -277,8 +280,9 @@ def update_config_file(path, base_url=None, model=None, reasoning=False):
     if model is not None:
         llm["model"] = model
     if reasoning:
-        llm["max_tokens"] = max(int(llm.get("max_tokens", 400)), 1500)
-        llm["timeout"] = max(int(llm.get("timeout", 240)), 600)
+        llm["max_tokens"] = max(int(llm.get("max_tokens", 300)), 300)
+        llm["timeout"] = max(int(llm.get("timeout", 300)), 300)
+    data["config_version"] = CONFIG_VERSION
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     return data
@@ -407,6 +411,28 @@ class Setup:
                     return m
         return None
 
+    def preferred_stem(self):
+        """Potongan nama berkas model pilihan (huruf kecil), untuk mengenali model yang sedang termuat."""
+        plan = choose_model(self.ram_gb or 8.0)
+        return plan["file"].rsplit(".", 1)[0].lower().replace("-gguf", "")
+
+    def is_preferred_loaded(self, info):
+        """info = teks daftar model termuat dari ping. Cocokkan nama model dengan pilihan untuk RAM ini."""
+        low = (info or "").lower().replace("-gguf", "")
+        stem = self.preferred_stem()
+        # nama di LM Studio bisa 'qwen/qwen3-8b' atau 'qwen3-8b-q4_k_m': cocokkan inti 'qwen3-8b'
+        core = "-".join(stem.split("-")[:2])
+        return core in low
+
+    def needs_switch(self, info):
+        """True bila yang termuat adalah model tier lain yang dikenal (mis. 14B yang lambat di laptop ini).
+        Model buatan sendiri (tidak dikenal) dibiarkan."""
+        if self.is_preferred_loaded(info):
+            return False
+        low = (info or "").lower().replace("-gguf", "")
+        cores = {"-".join(t[5].rsplit(".", 1)[0].lower().split("-")[:2]) for t in MODEL_TIERS}
+        return any(c in low for c in cores)
+
     def ensure_model(self, lms):
         plan = choose_model(self.ram_gb or 8.0)
         self.log("RAM terdeteksi %.1f GB. Model yang dipilih: %s (sekitar %.1f GB)."
@@ -450,6 +476,12 @@ class Setup:
             found = self.pick_existing(self.downloaded_models(lms), wanted)
             if found:
                 return found
+        # Terakhir: pakai model lain yang sudah ada di komputer daripada tidak punya model sama sekali.
+        every = [t[3][0] for t in MODEL_TIERS] + [t[5].rsplit(".", 1)[0] for t in MODEL_TIERS]
+        spare = self.pick_existing(self.downloaded_models(lms), every)
+        if spare:
+            self.log("Model pilihan gagal diunduh; memakai model yang sudah ada: %s" % spare)
+            return spare
         raise SetupError("Model tidak berhasil diunduh.\n%s" % last)
 
     def load_model(self, lms, model_key):
@@ -460,6 +492,7 @@ class Setup:
             if alt and alt not in names:
                 names.append(alt)
         out = ""
+        self._lms(lms, ["unload", "--all"], timeout=120)  # jangan biarkan model lama (lambat) ikut memakan RAM
         for name in names:
             for extra in (["--context-length", "8192", "--yes"], ["--yes"], []):
                 self._check_stop()
@@ -501,8 +534,8 @@ class Setup:
         self.load_model(lms, model_key)
         base = self.start_server(lms)
         info = self.verify()
-        self.cfg["max_tokens"] = max(int(self.cfg.get("max_tokens", 400)), 1500)
-        self.cfg["timeout"] = max(int(self.cfg.get("timeout", 240)), 600)
+        self.cfg["max_tokens"] = max(int(self.cfg.get("max_tokens", 300)), 300)
+        self.cfg["timeout"] = max(int(self.cfg.get("timeout", 300)), 300)
         update_config_file(self.config_path, base_url=base, model="", reasoning=True)
         self.log("Tes jawaban model...")
         try:

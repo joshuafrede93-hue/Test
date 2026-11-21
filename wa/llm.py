@@ -47,6 +47,32 @@ def extract_json(text):
     return None
 
 
+ACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "thought": {"type": "string", "maxLength": 140},
+        "action": {"type": "string", "enum": [
+            "click", "double_click", "right_click", "type", "hotkey", "press", "scroll", "open_app",
+            "focus_window", "wait", "ask_user", "done", "fail"]},
+        "id": {"type": "integer"},
+        "text": {"type": "string"},
+        "enter": {"type": "boolean"},
+        "replace": {"type": "boolean"},
+        "keys": {"type": "array", "items": {"type": "string"}},
+        "key": {"type": "string"},
+        "amount": {"type": "integer"},
+        "name": {"type": "string"},
+        "title": {"type": "string"},
+        "seconds": {"type": "number"},
+        "question": {"type": "string"},
+        "summary": {"type": "string"},
+        "reason": {"type": "string"},
+        "risk": {"type": "string", "enum": ["low", "high"]},
+    },
+    "required": ["thought", "action", "risk"],
+}
+
+
 class LocalLLM:
     """Klien untuk server lokal yang kompatibel dengan OpenAI API (LM Studio, Ollama, llama.cpp)."""
 
@@ -54,6 +80,7 @@ class LocalLLM:
         self.cfg = cfg
         # Abaikan proxy sistem: server model ada di komputer sendiri.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._extras_ok = True  # jadi False bila server menolak parameter tambahan (json schema, dll)
 
     def _url(self, path):
         return self.cfg["base_url"].rstrip("/") + path
@@ -64,10 +91,12 @@ class LocalLLM:
             "Authorization": "Bearer " + str(self.cfg.get("api_key", "local")),
         }
 
-    def chat(self, messages, image_b64=None):
+    def _build_payload(self, messages, image_b64, max_tokens, schema, extras):
         msgs = [dict(m) for m in messages]
+        last = msgs[-1]
+        if self.cfg.get("no_think", True) and isinstance(last["content"], str):
+            last["content"] = last["content"] + "\n/no_think"  # perintah resmi Qwen3: lewati mode berpikir
         if image_b64 and self.cfg.get("use_vision"):
-            last = msgs[-1]
             last["content"] = [
                 {"type": "text", "text": last["content"]},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}},
@@ -75,20 +104,40 @@ class LocalLLM:
         payload = {
             "messages": msgs,
             "temperature": self.cfg.get("temperature", 0.1),
-            "max_tokens": self.cfg.get("max_tokens", 400),
+            "max_tokens": int(max_tokens or self.cfg.get("max_tokens", 300)),
             "stream": False,
         }
         if self.cfg.get("model"):
             payload["model"] = self.cfg["model"]
+        if extras and schema and self.cfg.get("json_mode", True):
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "action", "strict": True, "schema": schema},
+            }
+        return payload
+
+    def _post(self, payload):
         req = urllib.request.Request(
             self._url("/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
             headers=self._headers(),
             method="POST",
         )
+        with self._opener.open(req, timeout=self.cfg.get("timeout", 300)) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def chat(self, messages, image_b64=None, max_tokens=None, schema=None):
+        extras = self._extras_ok
         try:
-            with self._opener.open(req, timeout=self.cfg.get("timeout", 240)) as r:
-                data = json.loads(r.read().decode("utf-8"))
+            try:
+                data = self._post(self._build_payload(messages, image_b64, max_tokens, schema, extras))
+            except urllib.error.HTTPError as e:
+                if e.code == 400 and extras and schema:
+                    # Server lama tidak mengenal response_format: ulangi tanpa itu dan ingat pilihannya.
+                    self._extras_ok = False
+                    data = self._post(self._build_payload(messages, image_b64, max_tokens, schema, False))
+                else:
+                    raise
         except urllib.error.HTTPError as e:
             body = ""
             try:

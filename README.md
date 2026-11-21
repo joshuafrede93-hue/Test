@@ -18,7 +18,9 @@ Kalau memakai Ollama: ubah di `config.json` menjadi `"base_url": "http://localho
 
 Tulis tugas dalam bahasa biasa, misalnya: `buka notepad lalu tulis "rapat jam 10" dan simpan di Desktop sebagai rapat.txt`. Tekan **Jalankan**. Jendela Asisten PC akan mengecil dan muncul kotak status kecil di pojok kanan bawah.
 
-- **F12** atau tombol Stop menghentikan agen kapan saja.
+- **F12** atau tombol Stop (ikon kotak) menghentikan agen kapan saja.
+- **Perintah suara**: klik ikon mikrofon atau tekan **F9**, ucapkan tugas, lalu berhenti bicara. Teks dikenali lewat layanan pengenalan suara Google (butuh internet) dan langsung dijalankan (ubah `voice.auto_run` ke `false` di config.json bila ingin dicek dulu).
+- Saat AI butuh persetujuan atau jawaban, jendela konfirmasi muncul sendiri di paling depan, disertai bunyi, notifikasi Windows, dan kedipan di taskbar.
 - Menggerakkan mouse ke pojok kiri atas layar juga menghentikan paksa (pengaman pyautogui).
 - Untuk aksi berisiko (hapus, kirim, bayar, install, kolom sandi, tutup paksa, Enter di aplikasi pesan), muncul dialog konfirmasi. Aksi biasa jalan tanpa bertanya.
 - Kalau AI butuh informasi, ia bertanya lewat kotak dialog.

@@ -29,7 +29,7 @@ jobs:
       - name: Uji tampilan
         run: python tests/smoke_gui.py
       - name: Bangun exe
-        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-all customtkinter --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard main.py
+        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-all customtkinter --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard --collect-all speech_recognition --collect-all sounddevice --hidden-import winotify main.py
       - name: Siapkan folder hasil
         shell: pwsh
         run: |

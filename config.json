@@ -1,22 +1,34 @@
 {
+  "config_version": 2,
   "llm": {
     "base_url": "http://localhost:1234/v1",
     "model": "",
     "api_key": "local",
     "temperature": 0.1,
-    "max_tokens": 400,
-    "timeout": 240,
+    "max_tokens": 300,
+    "timeout": 300,
+    "no_think": true,
+    "json_mode": true,
+    "auto_switch_model": true,
     "use_vision": false,
     "vision_max_width": 1024
   },
   "agent": {
     "max_steps": 25,
-    "step_delay": 0.8,
-    "max_elements": 70,
-    "history_window": 8,
+    "step_delay": 0.5,
+    "max_elements": 45,
+    "history_window": 6,
     "auto_reflect": true,
     "stop_hotkey": "f12",
     "skill_match_threshold": 0.6
+  },
+  "voice": {
+    "enabled": true,
+    "language": "id-ID",
+    "hotkey": "f9",
+    "auto_run": true,
+    "max_seconds": 15,
+    "silence_seconds": 1.2
   },
   "safety": {
     "extra_risky_words": [],
