@@ -453,7 +453,8 @@ class App:
 
     def _startup_worker(self):
         bridge = GuiBridge(self.q, self.stop_event)
-        self._check_update_worker(bridge, manual=False)
+        if self.cfg.get("update", {}).get("check_on_start", True):
+            self._check_update_worker(bridge, manual=False)
         ok, info = self.llm.ping()
         if ok and "belum ada model" not in info:
             return
@@ -487,7 +488,7 @@ class App:
                          args=(GuiBridge(self.q, self.stop_event), manual), daemon=True).start()
 
     def _check_update_worker(self, bridge, manual):
-        info = updater.check_for_update(__version__)
+        info = updater.check_for_update(__version__, repo=self.cfg.get("update", {}).get("repo", updater.REPO))
         if not info:
             if manual:
                 bridge.log("Tidak ada update. Versi %s sudah yang terbaru (atau internet tidak terjangkau)." % __version__)

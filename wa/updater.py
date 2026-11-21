@@ -7,10 +7,14 @@ import sys
 import urllib.request
 import zipfile
 
-REPO = "joshuafrede93-hue/Test"
+REPO = "Mazehax/AI-Hazmat"
 TAG_PREFIX = "asistenpc-v"          # rilis Asisten PC diberi tag asistenpc-v0.2.0 dst.
 ASSET_NAME = "AsistenPC-windows.zip"
-API_URL = "https://api.github.com/repos/%s/releases?per_page=30" % REPO
+
+
+def api_url(repo=REPO):
+    return "https://api.github.com/repos/%s/releases?per_page=30" % repo
+
 
 
 def parse_version(text):
@@ -40,18 +44,18 @@ def pick_release(releases, prefix=TAG_PREFIX, asset_name=ASSET_NAME):
     return best
 
 
-def fetch_releases(timeout=15, opener=None):
-    req = urllib.request.Request(API_URL, headers={"Accept": "application/vnd.github+json",
+def fetch_releases(timeout=15, opener=None, repo=REPO):
+    req = urllib.request.Request(api_url(repo), headers={"Accept": "application/vnd.github+json",
                                                    "User-Agent": "AsistenPC-updater"})
     op = opener or urllib.request.build_opener()
     with op.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def check_for_update(current_version, fetch=fetch_releases):
+def check_for_update(current_version, fetch=None, repo=REPO):
     """Mengembalikan info rilis bila ada versi lebih baru, jika tidak None. Error jaringan -> None."""
     try:
-        rel = pick_release(fetch())
+        rel = pick_release(fetch() if fetch else fetch_releases(repo=repo))
     except Exception:
         return None
     if rel and is_newer(rel["version"], current_version):

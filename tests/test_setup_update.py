@@ -244,6 +244,12 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(updater.check_for_update("0.2.0", fetch=lambda: rels)["version"], "0.3.0")
         self.assertIsNone(updater.check_for_update("0.3.0", fetch=lambda: rels))
 
+    def test_default_repo_and_api_url(self):
+        self.assertEqual(updater.REPO, "Mazehax/AI-Hazmat")
+        self.assertIn("/repos/Mazehax/AI-Hazmat/releases", updater.api_url())
+        from wa.config import load_config
+        self.assertEqual(load_config(None)["update"]["repo"], "Mazehax/AI-Hazmat")
+
     def test_network_error_is_silent(self):
         def boom():
             raise OSError("offline")

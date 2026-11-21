@@ -3,7 +3,7 @@ name: Build Windows exe
 on:
   workflow_dispatch:
   push:
-    branches: [asisten-pc]
+    branches: [main, master, asisten-pc]
 
 permissions:
   contents: write
@@ -44,7 +44,7 @@ jobs:
           $v = (Select-String -Path wa/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
           "version=$v" >> $env:GITHUB_OUTPUT
       - name: Terbitkan rilis
-        if: github.ref == 'refs/heads/asisten-pc'
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: asistenpc-v${{ steps.ver.outputs.version }}

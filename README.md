@@ -102,6 +102,14 @@ Tombol **Setup otomatis** menjalankan hal yang sama kapan saja. Butuh ruang disk
 ## Update dari pengembang
 
 Saat dibuka (dan lewat tombol **Cek update**) aplikasi memeriksa GitHub Releases repo
-`joshuafrede93-hue/Test` untuk tag `asistenpc-v*`. Bila ada versi lebih baru, Anda ditanya dulu;
+`Mazehax/AI-Hazmat` (bisa diganti di `config.json`, bagian `update.repo`) untuk tag `asistenpc-v*`. Bila ada versi lebih baru, Anda ditanya dulu;
 setelah setuju aplikasi mengunduh, menutup diri, mengganti berkas program, dan membuka lagi.
 `config.json` dan folder `data` (memori, skill, log) tidak ditimpa.
+
+## Menerbitkan rilis dari repo GitHub sendiri
+
+1. Buat repo publik di GitHub (misal `AI-Hazmat`), lalu unggah semua isi folder ini, termasuk folder `.github`.
+2. Di repo: Settings, Actions, General, Workflow permissions, pilih **Read and write permissions**, Save.
+3. Buka tab Actions dan jalankan workflow **Build Windows exe** (atau cukup unggah/commit berkas apa pun).
+4. Setelah hijau, rilis `asistenpc-vX.Y.Z` muncul di tab Releases berisi `AsistenPC-windows.zip`.
+5. Untuk update berikutnya: ubah `__version__` di `wa/__init__.py` ke angka lebih besar, commit. Aplikasi yang terpasang akan menawarkan update otomatis.

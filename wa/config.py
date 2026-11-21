@@ -26,6 +26,11 @@ DEFAULTS = {
         "stop_hotkey": "f12",
         "skill_match_threshold": 0.6,
     },
+    "update": {
+        # Repo GitHub tempat rilis Asisten PC diterbitkan (format pemilik/nama-repo, harus publik).
+        "repo": "Mazehax/AI-Hazmat",
+        "check_on_start": True,
+    },
     "safety": {
         "extra_risky_words": [],
         "confirm_every_action": False,
