@@ -272,6 +272,8 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn("/XF config.json", s)
         self.assertIn("/XD data", s)
         self.assertIn("PID eq 42", s)
+        self.assertIn("update.log", updater.build_swap_script("N", "A", "E", 1, "C:\\x\\update.log"))
+        self.assertIn('start "" /D "A" "A\\AsistenPC.exe"', s)
 
 
 if __name__ == "__main__":

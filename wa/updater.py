@@ -95,21 +95,27 @@ def find_payload_root(folder, exe_name="AsistenPC.exe"):
     return None
 
 
-def build_swap_script(new_dir, app_dir, exe_path, pid):
+def build_swap_script(new_dir, app_dir, exe_path, pid, log_path="update.log"):
     """Skrip kecil yang menunggu aplikasi berhenti, menyalin berkas baru (config.json dan data tidak
-    ditimpa), lalu menyalakan aplikasi lagi."""
+    ditimpa), lalu menyalakan aplikasi lagi. Semua langkah dicatat ke update.log untuk diagnosis."""
     return (
         "@echo off\r\n"
+        "chcp 65001 >NUL\r\n"
+        'set "LOG=%(log)s"\r\n'
+        'echo [%%date%% %%time%%] mulai, menunggu PID %(pid)d >> "%%LOG%%"\r\n'
         ":wait\r\n"
         'tasklist /FI "PID eq %(pid)d" 2>NUL | find "%(pid)d" >NUL\r\n'
         "if not errorlevel 1 (\r\n"
         "  ping -n 2 127.0.0.1 >NUL\r\n"
         "  goto wait\r\n"
         ")\r\n"
-        'robocopy "%(new)s" "%(app)s" /E /XF config.json /XD data /R:5 /W:2 >NUL\r\n'
-        'start "" "%(exe)s"\r\n'
+        'echo [%%time%%] menyalin berkas >> "%%LOG%%"\r\n'
+        'robocopy "%(new)s" "%(app)s" /E /XF config.json /XD data /R:10 /W:2 >> "%%LOG%%" 2>&1\r\n'
+        'echo [%%time%%] robocopy selesai, kode %%errorlevel%% >> "%%LOG%%"\r\n'
+        'start "" /D "%(app)s" "%(exe)s"\r\n'
+        'echo [%%time%%] aplikasi dinyalakan >> "%%LOG%%"\r\n'
         '(goto) 2>NUL & del "%%~f0"\r\n'
-    ) % {"pid": pid, "new": new_dir, "app": app_dir, "exe": exe_path}
+    ) % {"pid": pid, "new": new_dir, "app": app_dir, "exe": exe_path, "log": log_path}
 
 
 def prepare_and_swap(info, app_dir, work_dir, progress=None, download_fn=download):
@@ -130,8 +136,12 @@ def prepare_and_swap(info, app_dir, work_dir, progress=None, download_fn=downloa
         raise RuntimeError("Berkas update tidak berisi AsistenPC.exe.")
     exe_path = os.path.join(app_dir, "AsistenPC.exe")
     script = os.path.join(work_dir, "pasang_update.cmd")
-    with open(script, "w", encoding="ascii", errors="replace", newline="") as f:
-        f.write(build_swap_script(payload, app_dir, exe_path, os.getpid()))
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-    subprocess.Popen(["cmd", "/c", script], creationflags=flags, close_fds=True)
+    log_path = os.path.join(work_dir, "update.log")
+    with open(script, "w", encoding="utf-8", newline="") as f:
+        f.write(build_swap_script(payload, app_dir, exe_path, os.getpid(), log_path))
+    # CREATE_NO_WINDOW saja (tanpa DETACHED_PROCESS): cmd tetap butuh konsol tersembunyi agar
+    # tasklist/ping/robocopy jalan, dan tetap hidup setelah aplikasi ini keluar.
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen(["cmd.exe", "/d", "/c", script], creationflags=flags, close_fds=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return script
