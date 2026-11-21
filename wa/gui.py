@@ -454,12 +454,11 @@ class App:
     def _startup_worker(self):
         bridge = GuiBridge(self.q, self.stop_event)
         self._check_update_worker(bridge, manual=False)
-        ok, _info = self.llm.ping()
-        if not ok:
-            bridge.log("Server model belum menyala.")
-            if bridge.confirm("Server model (LM Studio) belum menyala.\n\nJalankan Setup otomatis sekarang? "
-                              "Aplikasi akan memasang/menyalakan LM Studio dan menyiapkan model."):
-                self._setup_worker(bridge)
+        ok, info = self.llm.ping()
+        if ok and "belum ada model" not in info:
+            return
+        bridge.log("Model AI belum siap. Menyiapkan otomatis (LM Studio + model), mohon tunggu...")
+        self._setup_worker(bridge)
 
     def start_setup(self):
         if self.busy_setup or self.agent_running:

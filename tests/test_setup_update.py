@@ -49,6 +49,7 @@ class FakeLms:
         self.get_fails_first = get_fails_first
         self.calls = []
         self.get_count = 0
+        self.dl_urls = []
 
     def __call__(self, args, timeout=120, stdin_text=None, on_line=None):
         self.calls.append(args[1:])
@@ -73,14 +74,20 @@ class FakeLms:
         return 1, "?"
 
 
-def make_setup(ui, runner, ram=16.0, pings=None, tmp=None):
+def make_setup(ui, runner, ram=16.0, pings=None, tmp=None, downloader=None):
     cfg = {"base_url": "http://localhost:1234/v1", "model": "", "max_tokens": 400, "timeout": 240}
     llm = FakeLLM(cfg, pings or [(True, "qwen/qwen3-14b")])
     path = os.path.join(tmp, "config.json")
     with open(path, "w") as f:
         json.dump({"llm": {"base_url": "x"}, "agent": {"max_steps": 9}}, f)
+    def fake_dl(url, dest, prog, stop):
+        runner.downloaded = True
+        runner.dl_urls.append(url)
+        return 9
+
     s = Setup(ui, llm, cfg, path, runner=runner, ram_gb=ram, sleep=lambda s: None,
-              finder_lms=lambda: "lms.exe", finder_exe=lambda: "LM Studio.exe", launcher=lambda e: None)
+              finder_lms=lambda: "lms.exe", finder_exe=lambda: "LM Studio.exe", launcher=lambda e: None,
+              downloader=downloader or fake_dl, models_path=os.path.join(tmp, "models"), free_gb=100)
     return s, cfg, path
 
 
@@ -107,9 +114,9 @@ class SetupTests(unittest.TestCase):
             s, cfg, path = make_setup(ui, runner, tmp=tmp)
             msg = s.run_all()
             self.assertIn("Setup selesai", msg)
-            cmds = [c[0] for c in runner.calls]
-            self.assertIn("get", cmds)
-            self.assertLess(cmds.index("get"), cmds.index("load"))
+            self.assertEqual(ui.asked, [])  # sepenuhnya otomatis, tanpa pertanyaan
+            self.assertTrue(runner.dl_urls[0].endswith("Qwen3-14B-Q4_K_M.gguf"))
+            self.assertIn("load", [c[0] for c in runner.calls])
             saved = json.load(open(path))
             self.assertEqual(saved["agent"]["max_steps"], 9)  # pengaturan lain utuh
             self.assertEqual(saved["llm"]["base_url"], "http://localhost:1234/v1")
@@ -121,33 +128,92 @@ class SetupTests(unittest.TestCase):
             ui, runner = FakeUI(), FakeLms(downloaded=True)
             s, _cfg, _p = make_setup(ui, runner, tmp=tmp)
             s.run_all()
+            self.assertEqual(runner.dl_urls, [])
             self.assertNotIn("get", [c[0] for c in runner.calls])
-            self.assertEqual(ui.asked, [])  # tidak perlu izin unduh
 
-    def test_falls_back_to_second_model_key(self):
+    def test_falls_back_to_lms_get_when_direct_download_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ui, runner = FakeUI(), FakeLms(get_fails_first=True)
-            # setelah gagal pertama, ls tetap kosong sampai get kedua berhasil
-            s, _c, _p = make_setup(ui, runner, tmp=tmp)
+            ui, runner = FakeUI(), FakeLms()
+
+            def bad(url, dest, prog, stop):
+                raise SetupError("403")
+            s, _c, _p = make_setup(ui, runner, tmp=tmp, downloader=bad)
             s.run_all()
-            self.assertEqual(runner.get_count, 2)
+            self.assertEqual(runner.get_count, 1)
 
-    def test_user_declines_download(self):
+    def test_not_enough_disk(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ui, runner = FakeUI(yes=False), FakeLms()
+            ui, runner = FakeUI(), FakeLms()
             s, _c, _p = make_setup(ui, runner, tmp=tmp)
+            s.free_gb = 3
             with self.assertRaises(SetupError):
                 s.run_all()
-            self.assertNotIn("get", [c[0] for c in runner.calls])
+            self.assertEqual(runner.dl_urls, [])
 
-    def test_install_declined_when_lmstudio_missing(self):
+    def test_installs_when_app_missing_even_if_lms_folder_remains(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ui = FakeUI(yes=False)
-            s, _c, _p = make_setup(ui, FakeLms(), tmp=tmp)
-            s.find_lms = lambda: None
-            s.find_exe = lambda: None
-            with self.assertRaises(SetupError):
-                s.ensure_lms()
+            ui, runner = FakeUI(), FakeLms(downloaded=True)
+            s, _c, _p = make_setup(ui, runner, tmp=tmp)
+            state = {"installed": False}
+            s.find_exe = lambda: "LM Studio.exe" if state["installed"] else None
+            calls = []
+
+            def run(args, timeout=120, stdin_text=None, on_line=None):
+                if args[0] == "winget":
+                    calls.append(args)
+                    state["installed"] = True
+                    return 0, "ok"
+                return runner(args, timeout, stdin_text, on_line)
+            s.run = run
+            s.run_all()
+            self.assertEqual(len(calls), 1)
+            self.assertIn("ElementLabs.LMStudio", calls[0])
+
+    def test_clean_line_strips_ansi_and_spinners(self):
+        from wa.lmstudio_setup import clean_line
+        self.assertEqual(clean_line("\x1b[?25l\x1b[0K"), "")
+        self.assertEqual(clean_line("\u2833 Resolving download plan...\x1b[0K"), "Resolving download plan...")
+        self.assertEqual(clean_line("\u2819 "), "")
+
+    def test_stub_catalog_entry_is_not_a_model(self):
+        out = json.dumps([{"type": "llm", "modelKey": "qwen/qwen3-14b", "sizeBytes": 174000}])
+        self.assertEqual(parse_models(out), [])
+
+    def test_download_file_resumes(self):
+        import http.server
+        import threading
+        from wa.lmstudio_setup import download_file
+        data = bytes(range(256)) * 2000
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                start = int(rng.split("=")[1].rstrip("-")) if rng else 0
+                body = data[start:]
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = os.path.join(tmp, "a", "m.gguf")
+                os.makedirs(os.path.dirname(dest))
+                with open(dest + ".part", "wb") as f:
+                    f.write(data[:1000])
+                import urllib.request
+                op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                size = download_file("http://127.0.0.1:%d/x" % srv.server_port, dest, opener=op)
+                self.assertEqual(size, len(data))
+                self.assertEqual(open(dest, "rb").read(), data)
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_update_config_keeps_larger_values(self):
         with tempfile.TemporaryDirectory() as tmp:

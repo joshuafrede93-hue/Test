@@ -88,16 +88,16 @@ python main.py --cli "buka notepad"
 - `wa/gui.py`: jendela aplikasi
 - `tests/`: tes otomatis (`python -m unittest discover -s tests`)
 
-## Setup otomatis LM Studio (baru di 0.2.0)
+## Setup otomatis LM Studio (sejak 0.2.0, penuh otomatis sejak 0.2.2)
 
-Tekan **Setup otomatis**. Aplikasi akan, dengan izin Anda di setiap langkah besar:
+Saat aplikasi dibuka dan model AI belum siap, aplikasi menyiapkannya sendiri tanpa bertanya lagi:
 
-1. memasang LM Studio lewat winget bila belum ada, lalu membukanya sekali agar perintah `lms` siap;
-2. memilih model sesuai RAM (16 GB: Qwen3 14B Q4, 12 GB: Qwen3 8B, 8 GB: Qwen3 4B) dan mengunduhnya;
+1. memasang LM Studio lewat winget (cadangan: installer resmi) bila belum ada, lalu membukanya sekali agar perintah `lms` siap;
+2. memilih model sesuai RAM (16 GB: Qwen3 14B Q4, 12 GB: Qwen3 8B, 8 GB: Qwen3 4B) dan mengunduhnya langsung dari Hugging Face ke folder model LM Studio, dengan persentase di log dan bisa dilanjutkan bila putus;
 3. memuat model (konteks 8192), menyalakan server di `http://localhost:1234`;
 4. mengetes jawaban model, lalu menulis `base_url`, `max_tokens` (min 1500) dan `timeout` (min 600) ke `config.json`.
 
-Jika server belum menyala saat aplikasi dibuka, aplikasi menawarkan setup ini sendiri.
+Tombol **Setup otomatis** menjalankan hal yang sama kapan saja. Butuh ruang disk bebas sekitar 11 GB dan internet.
 
 ## Update dari pengembang
 
