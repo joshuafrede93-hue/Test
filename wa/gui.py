@@ -9,7 +9,6 @@ import sys
 
 from . import APP_TITLE, __version__
 from .core import UI
-from . import updater
 from .lmstudio_setup import Setup, SetupError
 
 
@@ -145,7 +144,6 @@ class App:
         nav("Ajari AI", self.teach)
         nav("Skill tersimpan", self.show_skills)
         nav("Fakta tentang saya", self.add_fact)
-        nav("Cek update", lambda: self.check_update(manual=True))
         ctk.CTkLabel(side, text="F12 = hentikan AI", font=(FONT, 11), text_color=PALETTE["muted"]).pack(
             side="bottom", anchor="w", padx=20, pady=16)
 
@@ -453,8 +451,6 @@ class App:
 
     def _startup_worker(self):
         bridge = GuiBridge(self.q, self.stop_event)
-        if self.cfg.get("update", {}).get("check_on_start", True):
-            self._check_update_worker(bridge, manual=False)
         ok, info = self.llm.ping()
         if ok and "belum ada model" not in info:
             return
@@ -481,47 +477,6 @@ class App:
                 bridge.log("Setup gagal tak terduga: %s" % e)
         finally:
             self.busy_setup = False
-
-    # ---------- update ----------
-    def check_update(self, manual=False):
-        threading.Thread(target=self._check_update_worker,
-                         args=(GuiBridge(self.q, self.stop_event), manual), daemon=True).start()
-
-    def _check_update_worker(self, bridge, manual):
-        ucfg = self.cfg.get("update", {})
-        token = ucfg.get("token") or None
-        errors = []
-        info = updater.check_for_update(__version__, repo=ucfg.get("repo", updater.REPO), token=token, errors=errors)
-        if not info:
-            if errors:
-                bridge.log("Cek update gagal: %s" % errors[0] if manual else "Cek update dilewati: %s" % errors[0])
-            elif manual:
-                bridge.log("Tidak ada update. Versi %s sudah yang terbaru." % __version__)
-            return
-        bridge.log("Update tersedia: versi %s (sekarang %s)." % (info["version"], __version__))
-        notes = (info.get("notes") or "")[:400]
-        if not bridge.confirm("Update Asisten PC versi %s tersedia.\n\n%s\n\nPasang sekarang? Aplikasi akan "
-                              "menutup sendiri lalu terbuka lagi. Pengaturan, skill, dan memori Anda tetap aman."
-                              % (info["version"], notes)):
-            return
-        try:
-            bridge.log("Mengunduh update...")
-            last = [0]
-
-            def prog(got, total):
-                pct = int(got * 100 / total)
-                if pct >= last[0] + 20:
-                    last[0] = pct
-                    bridge.log("Unduh %d%%" % pct)
-
-            updater.prepare_and_swap(info, self.base_dir, os.path.join(self.base_dir, "data", "update"), prog, token=token)
-        except Exception as e:
-            bridge.log("Update gagal: %s" % e)
-            if info.get("page"):
-                bridge.log("Unduh manual di: %s" % info["page"])
-            return
-        bridge.log("Update siap. Menutup aplikasi untuk memasang...")
-        self.q.put(("call", self._on_close))
 
     def _on_close(self):
         self.stop_event.set()

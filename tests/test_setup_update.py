@@ -3,11 +3,9 @@ import os
 import sys
 import tempfile
 import unittest
-import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wa import updater
 from wa.lmstudio_setup import (Setup, SetupError, choose_model, parse_models, parse_port,
                                update_config_file)
 
@@ -102,6 +100,15 @@ class SetupTests(unittest.TestCase):
         out = json.dumps([{"type": "llm", "modelKey": "a/b"}, {"type": "embedding", "modelKey": "e/f"}])
         self.assertEqual(parse_models(out), ["a/b"])
         self.assertEqual(parse_models("garbage"), [])
+
+    def test_parse_models_tolerates_noise_and_never_returns_json_blob(self):
+        noisy = "Resolving...\n" + json.dumps([{"type": "llm", "modelKey": "qwen/qwen3-14b-gguf/q.gguf",
+                                               "sizeBytes": 9000000000}]) + "\nbye"
+        self.assertEqual(parse_models(noisy), ["qwen/qwen3-14b-gguf/q.gguf"])
+        broken = '[{"type":"llm","modelKey":"a/b.gguf","sizeBytes":9000000000},{"type":"llm","modelKey":"c/d'
+        self.assertEqual(parse_models(broken), ["a/b.gguf"])
+        for k in parse_models('[{"type":"llm","modelKey":"x/y.gguf"} garbage'):
+            self.assertNotIn("{", k)
 
     def test_parse_port(self):
         self.assertEqual(parse_port("Server: ON, port: 1235"), 1235)
@@ -221,113 +228,6 @@ class SetupTests(unittest.TestCase):
             json.dump({"llm": {"max_tokens": 4000}}, open(p, "w"))
             d = update_config_file(p, reasoning=True)
             self.assertEqual(d["llm"]["max_tokens"], 4000)
-
-
-def release(tag, assets=True, draft=False, pre=False):
-    return {"tag_name": tag, "draft": draft, "prerelease": pre, "body": "catatan", "html_url": "u",
-            "assets": [{"name": updater.ASSET_NAME, "browser_download_url": "http://x/" + tag, "size": 5}] if assets else []}
-
-
-class UpdaterTests(unittest.TestCase):
-    def test_version_compare(self):
-        self.assertTrue(updater.is_newer("0.10.0", "0.9.5"))
-        self.assertFalse(updater.is_newer("0.2.0", "0.2.0"))
-
-    def test_pick_release_ignores_other_tags_and_drafts(self):
-        rels = [release("v9.9.9"), release("asistenpc-v0.3.0", draft=True),
-                release("asistenpc-v0.2.5", assets=False), release("asistenpc-v0.2.1"),
-                release("asistenpc-v0.2.0")]
-        self.assertEqual(updater.pick_release(rels)["version"], "0.2.1")
-
-    def test_check_for_update(self):
-        rels = [release("asistenpc-v0.3.0")]
-        self.assertEqual(updater.check_for_update("0.2.0", fetch=lambda: rels)["version"], "0.3.0")
-        self.assertIsNone(updater.check_for_update("0.3.0", fetch=lambda: rels))
-
-    def test_default_repo_and_api_url(self):
-        self.assertEqual(updater.REPO, "Mazehax/AI-Hazmat")
-        self.assertIn("/repos/Mazehax/AI-Hazmat/releases", updater.api_url())
-        from wa.config import load_config
-        self.assertEqual(load_config(None)["update"]["repo"], "Mazehax/AI-Hazmat")
-
-    def test_private_download_follows_redirect_without_auth(self):
-        import http.server
-        import threading
-        seen = {}
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *a):
-                pass
-
-            def do_GET(self):
-                seen[self.path] = self.headers.get("Authorization")
-                if self.path == "/api":
-                    self.send_response(302)
-                    self.send_header("Location", "http://127.0.0.1:%d/blob" % self.server.server_port)
-                    self.end_headers()
-                else:
-                    self.send_response(200)
-                    self.send_header("Content-Length", "3")
-                    self.end_headers()
-                    self.wfile.write(b"zip")
-
-        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                dest = os.path.join(tmp, "a.zip")
-                import urllib.request
-                op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                updater.download("http://127.0.0.1:%d/api" % srv.server_port, dest, opener=op, token="TKN")
-                self.assertEqual(open(dest, "rb").read(), b"zip")
-            self.assertEqual(seen["/api"], "Bearer TKN")
-            self.assertIsNone(seen["/blob"])
-        finally:
-            srv.shutdown()
-            srv.server_close()
-
-    def test_error_reasons_and_api_url(self):
-        errs = []
-        import urllib.error
-
-        def boom():
-            raise urllib.error.HTTPError("u", 404, "nf", {}, None)
-        self.assertIsNone(updater.check_for_update("0.1.0", fetch=boom, errors=errs))
-        self.assertIn("private", errs[0])
-        r = updater.pick_release([{"tag_name": "asistenpc-v1.0.0", "assets": [
-            {"name": updater.ASSET_NAME, "browser_download_url": "b", "url": "api", "size": 1}]}])
-        self.assertEqual(r["api_url"], "api")
-
-    def test_network_error_is_silent(self):
-        def boom():
-            raise OSError("offline")
-        self.assertIsNone(updater.check_for_update("0.1.0", fetch=boom))
-
-    def test_safe_extract_blocks_path_traversal(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            z = os.path.join(tmp, "a.zip")
-            with zipfile.ZipFile(z, "w") as f:
-                f.writestr("../evil.txt", "x")
-            with self.assertRaises(ValueError):
-                updater.safe_extract(z, os.path.join(tmp, "out"))
-
-    def test_find_payload_root(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            z = os.path.join(tmp, "a.zip")
-            with zipfile.ZipFile(z, "w") as f:
-                f.writestr("AsistenPC/AsistenPC.exe", "x")
-            out = os.path.join(tmp, "out")
-            os.makedirs(out)
-            updater.safe_extract(z, out)
-            self.assertTrue(updater.find_payload_root(out).endswith("AsistenPC"))
-
-    def test_swap_script_protects_config_and_data(self):
-        s = updater.build_swap_script("N", "A", "A\\AsistenPC.exe", 42)
-        self.assertIn("/XF config.json", s)
-        self.assertIn("/XD data", s)
-        self.assertIn("PID eq 42", s)
-        self.assertIn("update.log", updater.build_swap_script("N", "A", "E", 1, "C:\\x\\update.log"))
-        self.assertIn('start "" /D "A" "A\\AsistenPC.exe"', s)
 
 
 if __name__ == "__main__":

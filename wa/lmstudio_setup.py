@@ -214,17 +214,24 @@ def find_lmstudio_exe():
 
 
 def parse_models(ls_output):
-    """Ambil daftar kunci model LLM dari keluaran `lms ls --json` (atau teks biasa)."""
+    """Ambil daftar kunci model LLM dari keluaran `lms ls --json`. Tahan terhadap teks tambahan
+    di sekitar JSON dan JSON yang terpotong; tidak pernah mengembalikan potongan JSON sebagai kunci."""
+    text = ls_output or ""
+    data = None
+    start = text.find("[")
+    while start >= 0 and data is None:
+        try:
+            data, _end = json.JSONDecoder().raw_decode(text[start:])
+        except ValueError:
+            start = text.find("[", start + 1)
+    if isinstance(data, dict):
+        data = data.get("models") or data.get("data") or []
     keys = []
-    try:
-        data = json.loads(ls_output)
-        if isinstance(data, dict):
-            data = data.get("models") or data.get("data") or []
+    if isinstance(data, list):
         for m in data:
             if not isinstance(m, dict):
                 continue
-            kind = str(m.get("type", "llm")).lower()
-            if kind not in ("llm", "vlm"):
+            if str(m.get("type", "llm")).lower() not in ("llm", "vlm"):
                 continue
             size = m.get("sizeBytes")
             if isinstance(size, (int, float)) and size < MIN_MODEL_BYTES:
@@ -233,11 +240,22 @@ def parse_models(ls_output):
             if key:
                 keys.append(str(key))
         return keys
-    except (json.JSONDecodeError, TypeError):
-        pass
-    for line in ls_output.splitlines():
+    # JSON rusak/terpotong: ambil pasangan type/modelKey/sizeBytes dengan regex
+    for obj in re.finditer(r'\{[^{}]*?"modelKey"\s*:\s*"([^"]+)"[^{}]*?\}|\{[^{}]*"modelKey"\s*:\s*"([^"]+)"', text):
+        chunk = obj.group(0)
+        key = obj.group(1) or obj.group(2)
+        kind = re.search(r'"type"\s*:\s*"(\w+)"', chunk)
+        if kind and kind.group(1).lower() not in ("llm", "vlm"):
+            continue
+        size = re.search(r'"sizeBytes"\s*:\s*(\d+)', chunk)
+        if size and int(size.group(1)) < MIN_MODEL_BYTES:
+            continue
+        keys.append(key)
+    if keys:
+        return keys
+    for line in text.splitlines():
         line = line.strip()
-        if "/" in line and not line.lower().startswith(("you have", "llm", "embedding")):
+        if "/" in line and not re.search(r'[{}\[\]",]', line) and not line.lower().startswith(("you have", "llm", "embedding")):
             keys.append(line.split()[0])
     return keys
 
@@ -436,15 +454,20 @@ class Setup:
 
     def load_model(self, lms, model_key):
         self.log("Memuat model ke memori (konteks 8192)...")
-        attempts = [["load", model_key, "--context-length", "8192", "--yes"],
-                    ["load", model_key, "--yes"],
-                    ["load", model_key]]
+        base = model_key.rsplit("/", 1)[-1]
+        names = [model_key]
+        for alt in (base, base.rsplit(".", 1)[0]):
+            if alt and alt not in names:
+                names.append(alt)
         out = ""
-        for args in attempts:
-            self._check_stop()
-            code, out = self._lms(lms, args, timeout=900, stream=True)
-            if code == 0:
-                return True
+        for name in names:
+            for extra in (["--context-length", "8192", "--yes"], ["--yes"], []):
+                self._check_stop()
+                code, out = self._lms(lms, ["load", name] + extra, timeout=900, stream=True)
+                if code == 0:
+                    return True
+                if re.search(r"not found|cannot find", out, re.I):
+                    break  # nama ini salah; coba nama lain
         raise SetupError("Model gagal dimuat.\n%s" % out[-300:])
 
     def start_server(self, lms):
