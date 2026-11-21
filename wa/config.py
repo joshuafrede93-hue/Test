@@ -2,7 +2,7 @@ import copy
 import json
 import os
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
@@ -14,8 +14,8 @@ DEFAULTS = {
         "model": "",
         "api_key": "local",
         "temperature": 0.1,
-        # Balasan agen hanya satu objek JSON pendek, jadi 300 token cukup (lebih kecil = lebih cepat).
-        "max_tokens": 300,
+        # Hanya batas atas: balasan biasa pendek, tetapi skill dokumen (Excel/Word) butuh ruang untuk data.
+        "max_tokens": 1000,
         "timeout": 300,
         # Matikan mode "berpikir" Qwen3 dan paksa keluaran JSON: jauh lebih cepat dan lebih rapi.
         "no_think": True,

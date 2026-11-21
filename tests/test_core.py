@@ -76,6 +76,63 @@ def J(**kw):
     return json.dumps(kw)
 
 
+class FakeSkills:
+    def __init__(self, risky=False):
+        self.ran, self.risky = [], risky
+
+    def assess(self, action):
+        return (self.risky, "uji")
+
+    def run(self, name, args):
+        self.ran.append((name, args))
+        return "Laporan dibuat: C:\\x.xlsx"
+
+
+class TestSkillsInAgent(unittest.TestCase):
+    def test_model_param_aliases_are_accepted(self):
+        o = obs("Excel")
+        a = {"action": "focus_window", "window": "Book2 - Excel"}
+        self.assertIsNone(validate_action(a, o))
+        self.assertEqual(a["title"], "Book2 - Excel")
+        b = {"action": "open_app", "app": "excel"}
+        self.assertIsNone(validate_action(b, o))
+        self.assertEqual(b["name"], "excel")
+        self.assertIsNotNone(validate_action({"action": "focus_window"}, o))
+
+    def test_skill_validation(self):
+        o = obs("x")
+        self.assertIsNone(validate_action({"action": "skill", "name": "make_excel_report", "args": '{"kind": "keuangan"}'}, o))
+        self.assertIn("tidak ada", validate_action({"action": "skill", "name": "hack"}, o))
+
+    def test_skill_runs_and_finishes_without_clicking(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = FakeEnv([obs("Book1 - Excel", ("Cell A1", "Edit"))])
+            llm = FakeLLM([J(action="skill", name="make_excel_report", args={"kind": "keuangan", "active": True}, risk="low"),
+                           J(action="done", summary="laporan siap")])
+            sk = FakeSkills()
+            cfg = load_config(None)
+            cfg["agent"].update({"step_delay": 0, "auto_reflect": False})
+            agent = Agent(llm, env, Memory(d), Safety(cfg["safety"]), ScriptedUI(), cfg, skills=sk)
+            r = agent.run("buat laporan keuangan")
+            self.assertEqual(r.status, "done")
+            self.assertEqual(sk.ran, [("make_excel_report", {"kind": "keuangan", "active": True})])
+            self.assertEqual(env.performed, [])  # tidak ada klik/ketik
+
+    def test_risky_skill_needs_confirmation(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = FakeEnv([obs("x")])
+            llm = FakeLLM([J(action="skill", name="recycle", args={"path": "a"}, risk="low"),
+                           J(action="fail", reason="ditolak")])
+            sk = FakeSkills(risky=True)
+            ui = ScriptedUI()
+            cfg = load_config(None)
+            cfg["agent"].update({"step_delay": 0, "auto_reflect": False})
+            agent = Agent(llm, env, Memory(d), Safety(cfg["safety"]), ui, cfg, skills=sk)
+            agent.run("hapus a")
+            self.assertEqual(sk.ran, [])  # ditolak (ScriptedUI default False)
+            self.assertEqual(len(ui.confirm_msgs), 1)
+
+
 class TestJson(unittest.TestCase):
     def test_variants(self):
         self.assertEqual(extract_json('{"a": 1}'), {"a": 1})

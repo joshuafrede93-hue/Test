@@ -100,3 +100,13 @@ Saat aplikasi dibuka dan model AI belum siap, aplikasi menyiapkannya sendiri tan
 4. mengetes jawaban model, lalu menulis `base_url`, `max_tokens` (min 1500) dan `timeout` (min 600) ke `config.json`.
 
 Tombol **Setup otomatis** menjalankan hal yang sama kapan saja. Butuh ruang disk bebas sekitar 11 GB dan internet.
+
+
+## Skill bawaan (0.4.0)
+
+AI memakai skill berbasis kode untuk pekerjaan umum, jauh lebih cepat dan akurat daripada mengeklik layar:
+laporan Excel siap pakai (keuangan, penjualan, anggaran, inventaris, dengan rumus dan grafik), Excel/Word/PowerPoint
+dari data, menulis ke Excel yang sedang terbuka, melihat/mencari/membaca/menyalin/memindah/merapikan/zip berkas,
+buka berkas atau situs, cari di web, unduh berkas, screenshot, clipboard, info sistem, volume, kunci layar, dan
+`run_powershell` sebagai jalan terakhir. Hasil file disimpan di Dokumen\\AsistenPC. Skill yang bisa menghapus,
+menimpa, atau menjalankan perintah selalu meminta persetujuan lebih dulu.

@@ -467,7 +467,7 @@ class App:
         threading.Thread(target=self._voice_worker, daemon=True).start()
 
     def _voice_worker(self):
-        text, error = "", None
+        text, error, lst = "", None, None
         try:
             lst = Listener(self.voice_cfg)
             text = lst.listen(should_stop=self._voice_stop,
@@ -476,7 +476,8 @@ class App:
             error = str(e)
         except Exception as e:
             error = "Perintah suara gagal: %s" % e
-        self.q.put(("call", lambda: self._voice_done(text, error)))
+        peak = int(lst.last_peak) if lst else 0
+        self.q.put(("call", lambda: self._voice_done(text, error, peak)))
 
     def _voice_stop(self):
         return self.stop_event.is_set()
@@ -485,7 +486,7 @@ class App:
         if self.overlay_title is not None and status == "recognizing":
             self.overlay_title.configure(text="Mengenali ucapan...", text_color=PALETTE["warn"])
 
-    def _voice_done(self, text, error):
+    def _voice_done(self, text, error, peak=0):
         self.listening = False
         self.stop_event.clear()
         self.mic_btn.configure(image=self.icon_mic, fg_color=PALETTE["panel"], hover_color=PALETTE["line"])
@@ -496,7 +497,9 @@ class App:
             self.write("Suara gagal: " + error, "bad")
             return
         if not text:
-            self.write("Tidak ada ucapan yang terdengar jelas. Coba lagi (klik mikrofon atau F9).", "warn")
+            self.write("Tidak ada ucapan yang terdengar jelas (level suara tertinggi: %d). Bicara lebih dekat ke "
+                       "mikrofon lalu coba lagi. Jika angkanya selalu di bawah 100, periksa mikrofon dan izin "
+                       "mikrofon Windows (Pengaturan > Privasi > Mikrofon > izinkan aplikasi desktop)." % peak, "warn")
             return
         self.write('Terdengar: "%s"' % text, "ok")
         self.goal_var.set(text)

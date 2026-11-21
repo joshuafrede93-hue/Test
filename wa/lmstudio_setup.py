@@ -280,7 +280,7 @@ def update_config_file(path, base_url=None, model=None, reasoning=False):
     if model is not None:
         llm["model"] = model
     if reasoning:
-        llm["max_tokens"] = max(int(llm.get("max_tokens", 300)), 300)
+        llm["max_tokens"] = max(int(llm.get("max_tokens", 1000)), 1000)
         llm["timeout"] = max(int(llm.get("timeout", 300)), 300)
     data["config_version"] = CONFIG_VERSION
     with open(path, "w", encoding="utf-8") as f:
@@ -424,6 +424,14 @@ class Setup:
         core = "-".join(stem.split("-")[:2])
         return core in low
 
+    def loaded_name(self, info):
+        """Pilih nama model pilihan dari daftar model server (teks dipisah koma)."""
+        core = "-".join(self.preferred_stem().split("-")[:2])
+        for name in [n.strip() for n in (info or "").split(",")]:
+            if core in name.lower().replace("-gguf", "") and "embed" not in name.lower():
+                return name
+        return ""
+
     def needs_switch(self, info):
         """True bila yang termuat adalah model tier lain yang dikenal (mis. 14B yang lambat di laptop ini).
         Model buatan sendiri (tidak dikenal) dibiarkan."""
@@ -534,9 +542,12 @@ class Setup:
         self.load_model(lms, model_key)
         base = self.start_server(lms)
         info = self.verify()
-        self.cfg["max_tokens"] = max(int(self.cfg.get("max_tokens", 300)), 300)
+        self.cfg["max_tokens"] = max(int(self.cfg.get("max_tokens", 1000)), 1000)
         self.cfg["timeout"] = max(int(self.cfg.get("timeout", 300)), 300)
-        update_config_file(self.config_path, base_url=base, model="", reasoning=True)
+        chosen = self.loaded_name(info)
+        if chosen:
+            self.cfg["model"] = chosen  # kunci ke model pilihan agar server tidak memuat model lain (mis. 14B)
+        update_config_file(self.config_path, base_url=base, model=chosen or "", reasoning=True)
         self.log("Tes jawaban model...")
         try:
             reply = self.llm.chat([{"role": "user", "content": "Jawab satu kata: siap?"}])

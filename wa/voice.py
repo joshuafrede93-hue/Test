@@ -26,7 +26,7 @@ def rms(raw):
 
 
 def record_until_silence(read_chunk, should_stop=lambda: False, max_seconds=15.0, silence_seconds=1.2,
-                         start_timeout=6.0, on_level=None, chunk_seconds=CHUNK / RATE):
+                         start_timeout=8.0, on_level=None, chunk_seconds=CHUNK / RATE):
     """Baca potongan suara sampai pengguna berhenti bicara.
 
     read_chunk() -> bytes int16 mono sepanjang 0,1 detik. Mengembalikan bytes audio, atau b"" bila
@@ -38,7 +38,7 @@ def record_until_silence(read_chunk, should_stop=lambda: False, max_seconds=15.0
     heard = False
     quiet = 0.0
     elapsed = 0.0
-    threshold = 600.0
+    threshold = 200.0
     while elapsed < max_seconds:
         if should_stop():
             return b""
@@ -50,7 +50,7 @@ def record_until_silence(read_chunk, should_stop=lambda: False, max_seconds=15.0
         if not heard:
             if len(ambient) < 3:  # 0,3 detik pertama dipakai mengukur bising ruangan
                 ambient.append(level)
-                threshold = max(500.0, 3.0 * (sum(ambient) / len(ambient)))
+                threshold = max(150.0, 2.5 * (sum(ambient) / len(ambient)))
                 preroll.append(chunk)
                 continue
             if level > threshold:
@@ -122,17 +122,24 @@ class Listener:
         self.cfg = cfg or {}
         self.opener = opener
         self.recognizer = recognizer
+        self.last_peak = 0.0  # suara terkeras yang tertangkap; membantu mendiagnosis mikrofon yang terlalu pelan
 
     def listen(self, should_stop=lambda: False, on_status=lambda s: None, on_level=None):
         """Rekam lalu kenali. Mengembalikan teks ("" bila tidak ada ucapan). Melempar VoiceError."""
         read_chunk, close = self.opener()
+        self.last_peak = 0.0
+
+        def level(v):
+            self.last_peak = max(self.last_peak, v)
+            if on_level:
+                on_level(v)
         try:
             on_status("listening")
             pcm = record_until_silence(
                 read_chunk, should_stop,
                 max_seconds=float(self.cfg.get("max_seconds", 15)),
                 silence_seconds=float(self.cfg.get("silence_seconds", 1.2)),
-                on_level=on_level)
+                on_level=level)
         finally:
             close()
         if not pcm or should_stop():

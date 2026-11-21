@@ -8,3 +8,7 @@ customtkinter
 SpeechRecognition
 sounddevice
 winotify
+openpyxl
+python-docx
+python-pptx
+pypdf

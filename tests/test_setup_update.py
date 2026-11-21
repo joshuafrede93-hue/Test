@@ -132,7 +132,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(saved["agent"]["max_steps"], 9)  # pengaturan lain utuh
             self.assertEqual(saved["llm"]["base_url"], "http://localhost:1234/v1")
             self.assertGreaterEqual(saved["llm"]["max_tokens"], 300)
-            self.assertEqual(saved["config_version"], 2)
+            self.assertEqual(saved["config_version"], 3)
 
     def test_skips_download_when_model_exists(self):
         with tempfile.TemporaryDirectory() as tmp:

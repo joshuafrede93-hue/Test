@@ -53,7 +53,7 @@ ACTION_SCHEMA = {
         "thought": {"type": "string", "maxLength": 140},
         "action": {"type": "string", "enum": [
             "click", "double_click", "right_click", "type", "hotkey", "press", "scroll", "open_app",
-            "focus_window", "wait", "ask_user", "done", "fail"]},
+            "focus_window", "wait", "ask_user", "done", "fail", "skill"]},
         "id": {"type": "integer"},
         "text": {"type": "string"},
         "enter": {"type": "boolean"},
@@ -67,6 +67,7 @@ ACTION_SCHEMA = {
         "question": {"type": "string"},
         "summary": {"type": "string"},
         "reason": {"type": "string"},
+        "args": {"type": "object"},
         "risk": {"type": "string", "enum": ["low", "high"]},
     },
     "required": ["thought", "action", "risk"],
