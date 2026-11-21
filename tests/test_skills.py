@@ -96,8 +96,19 @@ class SkillTests(unittest.TestCase):
             self.s.run("nope", {})
         with self.assertRaises(SkillError):
             self.s.run("read_file", {"path": os.path.join(self.tmp.name, "tidak-ada.txt")})
-        with self.assertRaises(SkillError):
-            self.s.run("run_powershell", {"command": "dir"})  # bukan Windows
+        import types
+        import wa.skills as sk
+        fake = types.SimpleNamespace(stdout="halo", stderr="", returncode=0)
+        s = Skills(out_dir=self.tmp.name, runner=lambda *a, **k: fake)
+        old = sk.WIN
+        try:
+            sk.WIN = False
+            with self.assertRaises(SkillError):
+                s.run("run_powershell", {"command": "dir"})  # bukan Windows
+            sk.WIN = True
+            self.assertEqual(s.run("run_powershell", {"command": "dir"}), "halo")
+        finally:
+            sk.WIN = old
 
     def test_desktop_shortcut_resolves_to_home(self):
         self.assertTrue(self.s.resolve("Desktop/a.txt").endswith(os.path.join("Desktop", "a.txt")))
