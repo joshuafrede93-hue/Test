@@ -13,6 +13,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Susun folder dari berkas rata
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force wa, tests, data | Out-Null
+          Get-ChildItem -File -Filter 'wa__*.py' | ForEach-Object { Move-Item $_.FullName ("wa/" + $_.Name.Substring(4)) -Force }
+          Get-ChildItem -File -Filter 'tests__*.py' | ForEach-Object { Move-Item $_.FullName ("tests/" + $_.Name.Substring(7)) -Force }
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
