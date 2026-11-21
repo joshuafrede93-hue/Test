@@ -250,6 +250,54 @@ class UpdaterTests(unittest.TestCase):
         from wa.config import load_config
         self.assertEqual(load_config(None)["update"]["repo"], "Mazehax/AI-Hazmat")
 
+    def test_private_download_follows_redirect_without_auth(self):
+        import http.server
+        import threading
+        seen = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                seen[self.path] = self.headers.get("Authorization")
+                if self.path == "/api":
+                    self.send_response(302)
+                    self.send_header("Location", "http://127.0.0.1:%d/blob" % self.server.server_port)
+                    self.end_headers()
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Length", "3")
+                    self.end_headers()
+                    self.wfile.write(b"zip")
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = os.path.join(tmp, "a.zip")
+                import urllib.request
+                op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                updater.download("http://127.0.0.1:%d/api" % srv.server_port, dest, opener=op, token="TKN")
+                self.assertEqual(open(dest, "rb").read(), b"zip")
+            self.assertEqual(seen["/api"], "Bearer TKN")
+            self.assertIsNone(seen["/blob"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_error_reasons_and_api_url(self):
+        errs = []
+        import urllib.error
+
+        def boom():
+            raise urllib.error.HTTPError("u", 404, "nf", {}, None)
+        self.assertIsNone(updater.check_for_update("0.1.0", fetch=boom, errors=errs))
+        self.assertIn("private", errs[0])
+        r = updater.pick_release([{"tag_name": "asistenpc-v1.0.0", "assets": [
+            {"name": updater.ASSET_NAME, "browser_download_url": "b", "url": "api", "size": 1}]}])
+        self.assertEqual(r["api_url"], "api")
+
     def test_network_error_is_silent(self):
         def boom():
             raise OSError("offline")

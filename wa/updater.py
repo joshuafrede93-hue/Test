@@ -1,6 +1,7 @@
 """Deteksi dan pasang update dari pengembang lewat GitHub Releases."""
 import json
 import os
+import urllib.error
 import re
 import subprocess
 import sys
@@ -39,44 +40,85 @@ def pick_release(releases, prefix=TAG_PREFIX, asset_name=ASSET_NAME):
         ver = tag[len(prefix):]
         if best is None or parse_version(ver) > parse_version(best["version"]):
             best = {"version": ver, "url": asset.get("browser_download_url", ""),
+                    "api_url": asset.get("url", ""),
                     "size": asset.get("size", 0), "notes": (r.get("body") or "").strip(),
                     "page": r.get("html_url", "")}
     return best
 
 
-def fetch_releases(timeout=15, opener=None, repo=REPO):
-    req = urllib.request.Request(api_url(repo), headers={"Accept": "application/vnd.github+json",
-                                                   "User-Agent": "AsistenPC-updater"})
+def _headers(token=None, accept="application/vnd.github+json"):
+    h = {"Accept": accept, "User-Agent": "AsistenPC-updater"}
+    if token:
+        h["Authorization"] = "Bearer " + token
+    return h
+
+
+def fetch_releases(timeout=15, opener=None, repo=REPO, token=None):
+    req = urllib.request.Request(api_url(repo), headers=_headers(token))
     op = opener or urllib.request.build_opener()
     with op.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def check_for_update(current_version, fetch=None, repo=REPO):
-    """Mengembalikan info rilis bila ada versi lebih baru, jika tidak None. Error jaringan -> None."""
+def explain_error(e):
+    code = getattr(e, "code", None)
+    if code in (401, 403):
+        return "GitHub menolak akses (token salah atau kedaluwarsa, atau kuota habis)."
+    if code == 404:
+        return "Repo atau rilis tidak ditemukan. Jika repo private, isi update.token di config.json."
+    return "Tidak bisa menghubungi GitHub (%s)." % e
+
+
+def check_for_update(current_version, fetch=None, repo=REPO, token=None, errors=None):
+    """Mengembalikan info rilis bila ada versi lebih baru, jika tidak None.
+    Alasan gagal (bila ada) ditambahkan ke daftar `errors`."""
     try:
-        rel = pick_release(fetch() if fetch else fetch_releases(repo=repo))
-    except Exception:
+        rel = pick_release(fetch() if fetch else fetch_releases(repo=repo, token=token))
+    except Exception as e:
+        if errors is not None:
+            errors.append(explain_error(e))
         return None
     if rel and is_newer(rel["version"], current_version):
         return rel
     return None
 
 
-def download(url, dest, progress=None, opener=None, timeout=60):
-    req = urllib.request.Request(url, headers={"User-Agent": "AsistenPC-updater"})
-    op = opener or urllib.request.build_opener()
-    with op.open(req, timeout=timeout) as r, open(dest, "wb") as f:
-        total = int(r.headers.get("Content-Length", 0) or 0)
-        got = 0
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+def _stream(resp, dest, progress):
+    total = int(resp.headers.get("Content-Length", 0) or 0)
+    got = 0
+    with open(dest, "wb") as f:
         while True:
-            chunk = r.read(1024 * 256)
+            chunk = resp.read(1024 * 256)
             if not chunk:
                 break
             f.write(chunk)
             got += len(chunk)
             if progress and total:
                 progress(got, total)
+
+
+def download(url, dest, progress=None, opener=None, timeout=60, token=None):
+    """Unduh berkas rilis. Untuk repo private (token diisi), url adalah URL asset API; GitHub
+    membalas dengan redirect ke penyimpanan bertanda tangan, yang diikuti TANPA header Authorization."""
+    op = opener or urllib.request.build_opener()
+    if token:
+        req = urllib.request.Request(url, headers=_headers(token, "application/octet-stream"))
+        try:
+            with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as r:
+                _stream(r, dest, progress)
+            return dest
+        except urllib.error.HTTPError as e:
+            if e.code not in (301, 302, 303, 307, 308):
+                raise
+            url = e.headers.get("Location")
+    req = urllib.request.Request(url, headers={"User-Agent": "AsistenPC-updater"})
+    with op.open(req, timeout=timeout) as r:
+        _stream(r, dest, progress)
     return dest
 
 
@@ -122,13 +164,16 @@ def build_swap_script(new_dir, app_dir, exe_path, pid, log_path="update.log"):
     ) % {"pid": pid, "new": new_dir, "app": app_dir, "exe": exe_path, "log": log_path}
 
 
-def prepare_and_swap(info, app_dir, work_dir, progress=None, download_fn=download):
+def prepare_and_swap(info, app_dir, work_dir, progress=None, download_fn=download, token=None):
     """Unduh, ekstrak, tulis skrip penukar, jalankan. Pemanggil harus segera menutup aplikasi."""
     if not getattr(sys, "frozen", False) and not os.environ.get("ASISTENPC_FORCE_UPDATE"):
         raise RuntimeError("Pembaruan otomatis hanya untuk versi .exe. Unduh versi baru secara manual.")
     os.makedirs(work_dir, exist_ok=True)
     zip_path = os.path.join(work_dir, ASSET_NAME)
-    download_fn(info["url"], zip_path, progress)
+    if token and info.get("api_url"):
+        download_fn(info["api_url"], zip_path, progress, token=token)
+    else:
+        download_fn(info["url"], zip_path, progress)
     extract_dir = os.path.join(work_dir, "new")
     if os.path.isdir(extract_dir):
         import shutil

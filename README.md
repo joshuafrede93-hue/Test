@@ -108,8 +108,17 @@ setelah setuju aplikasi mengunduh, menutup diri, mengganti berkas program, dan m
 
 ## Menerbitkan rilis dari repo GitHub sendiri
 
-1. Buat repo publik di GitHub (misal `AI-Hazmat`), lalu unggah semua isi folder ini, termasuk folder `.github`.
+1. Buat repo di GitHub (misal `AI-Hazmat`; boleh private, lihat bagian bawah), lalu unggah semua isi folder ini, termasuk folder `.github`.
 2. Di repo: Settings, Actions, General, Workflow permissions, pilih **Read and write permissions**, Save.
 3. Buka tab Actions dan jalankan workflow **Build Windows exe** (atau cukup unggah/commit berkas apa pun).
 4. Setelah hijau, rilis `asistenpc-vX.Y.Z` muncul di tab Releases berisi `AsistenPC-windows.zip`.
 5. Untuk update berikutnya: ubah `__version__` di `wa/__init__.py` ke angka lebih besar, commit. Aplikasi yang terpasang akan menawarkan update otomatis.
+
+### Repo private
+
+Aplikasi tidak bisa membaca rilis repo private tanpa izin, jadi perlu token baca-saja:
+
+1. GitHub, foto profil, Settings, Developer settings, Personal access tokens, **Fine-grained tokens**, Generate new token.
+2. Repository access: **Only select repositories**, pilih repo AI-Hazmat saja. Permissions, Repository permissions, **Contents: Read-only**. Tentukan masa berlaku (maksimal 1 tahun), lalu Generate dan salin tokennya.
+3. Di laptop, buka `config.json` di samping `AsistenPC.exe`, isi `"update": { "repo": "Mazehax/AI-Hazmat", "token": "TOKEN_ANDA" }` (bagian lain biarkan), simpan, buka ulang aplikasi.
+4. Jangan unggah `config.json` yang sudah berisi token ke GitHub. Saat token kedaluwarsa, tombol Cek update akan menulis alasannya di log; buat token baru dan ganti.

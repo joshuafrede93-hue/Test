@@ -30,6 +30,8 @@ DEFAULTS = {
         # Repo GitHub tempat rilis Asisten PC diterbitkan (format pemilik/nama-repo, harus publik).
         "repo": "Mazehax/AI-Hazmat",
         "check_on_start": True,
+        # Hanya untuk repo PRIVATE: token GitHub read-only (Contents: Read) khusus repo itu. Isi di laptop, jangan di-commit.
+        "token": "",
     },
     "safety": {
         "extra_risky_words": [],

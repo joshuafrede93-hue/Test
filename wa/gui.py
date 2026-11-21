@@ -488,10 +488,15 @@ class App:
                          args=(GuiBridge(self.q, self.stop_event), manual), daemon=True).start()
 
     def _check_update_worker(self, bridge, manual):
-        info = updater.check_for_update(__version__, repo=self.cfg.get("update", {}).get("repo", updater.REPO))
+        ucfg = self.cfg.get("update", {})
+        token = ucfg.get("token") or None
+        errors = []
+        info = updater.check_for_update(__version__, repo=ucfg.get("repo", updater.REPO), token=token, errors=errors)
         if not info:
-            if manual:
-                bridge.log("Tidak ada update. Versi %s sudah yang terbaru (atau internet tidak terjangkau)." % __version__)
+            if errors:
+                bridge.log("Cek update gagal: %s" % errors[0] if manual else "Cek update dilewati: %s" % errors[0])
+            elif manual:
+                bridge.log("Tidak ada update. Versi %s sudah yang terbaru." % __version__)
             return
         bridge.log("Update tersedia: versi %s (sekarang %s)." % (info["version"], __version__))
         notes = (info.get("notes") or "")[:400]
@@ -509,7 +514,7 @@ class App:
                     last[0] = pct
                     bridge.log("Unduh %d%%" % pct)
 
-            updater.prepare_and_swap(info, self.base_dir, os.path.join(self.base_dir, "data", "update"), prog)
+            updater.prepare_and_swap(info, self.base_dir, os.path.join(self.base_dir, "data", "update"), prog, token=token)
         except Exception as e:
             bridge.log("Update gagal: %s" % e)
             if info.get("page"):

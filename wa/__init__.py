@@ -1,4 +1,4 @@
 """Asisten PC: agen AI lokal untuk mengendalikan aplikasi di Windows."""
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 APP_TITLE = "Asisten PC"
