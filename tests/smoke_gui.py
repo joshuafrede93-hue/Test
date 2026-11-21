@@ -1,8 +1,11 @@
 """Uji asap GUI: buka jendela, tulis log, buka dialog skill, lalu tutup. Dijalankan di Windows (CI)."""
 import os
 import sys
+import faulthandler
 import tempfile
 
+os.environ["ASISTEN_NO_TOAST"] = "1"
+faulthandler.dump_traceback_later(90, exit=True)  # bila macet, cetak lokasinya lalu keluar
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import customtkinter as ctk

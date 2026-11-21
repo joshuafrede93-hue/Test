@@ -1,5 +1,6 @@
 """Bantuan jendela Windows: bawa jendela ke depan, kedipkan ikon taskbar, bunyi, dan notifikasi.
 Semua fungsi aman dipanggil di sistem lain (tidak melakukan apa-apa) dan tidak pernah melempar error."""
+import os
 import sys
 
 IS_WIN = sys.platform == "win32"
@@ -69,15 +70,21 @@ def beep(kind="alert"):
         pass
 
 
-def notify(title, message):
-    """Notifikasi Windows (toast) di pojok layar. Diam-diam dilewati bila tidak tersedia."""
-    if not IS_WIN:
-        return False
+def _show_toast(title, message):
     try:
         from winotify import Notification, audio
         toast = Notification(app_id="Asisten PC", title=title[:60], msg=message[:220], duration="short")
         toast.set_audio(audio.Default, loop=False)
         toast.show()
-        return True
     except Exception:
+        pass
+
+
+def notify(title, message):
+    """Notifikasi Windows (toast) di pojok layar. Berjalan di thread terpisah supaya tidak membekukan jendela;
+    diam-diam dilewati bila tidak tersedia."""
+    if not IS_WIN or os.environ.get("ASISTEN_NO_TOAST"):
         return False
+    import threading
+    threading.Thread(target=_show_toast, args=(title, message), daemon=True).start()
+    return True
