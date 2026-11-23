@@ -20,8 +20,10 @@ WIN = sys.platform == "win32"
 
 # nama: (cara pakai singkat untuk prompt, risiko: low | high | check)
 SPECS = {
-    "make_excel_report": ('{"kind": "keuangan|penjualan|anggaran|inventaris", "path": optional, "active": true to write into the '
-                          'Excel window that is already open} - ready-made sample report with data, formulas and chart', "low"),
+    "make_excel_report": ('{"kind": "transaksi|keuangan|penjualan|anggaran|inventaris", "rows": optional number of data rows '
+                          '(transaksi, default 100), "path": optional, "active": true ONLY if Excel is already open} - ready-made '
+                          'table with sample data, formulas and chart; the file opens in Excel by itself. '
+                          'Use it for ANY request like "open Excel and make a table/report with N rows of dummy data"', "low"),
     "make_excel": ('{"path": optional, "sheets": [{"name": "...", "rows": [[header...],[...]], "chart": "bar|line|pie" optional}]} '
                    '- cells starting with "=" are formulas', "low"),
     "excel_write_active": ('{"rows": [[...],[...]], "start": "A1"} - write into the Excel sheet that is already open', "low"),
@@ -92,6 +94,16 @@ def _num(v):
             except ValueError:
                 return v
     return v
+
+
+def _cell(v):
+    """Angka ditulis sebagai angka, tanggal ISO sebagai tanggal sungguhan, sisanya apa adanya."""
+    if isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", v.strip()):
+        try:
+            return datetime.date.fromisoformat(v.strip())
+        except ValueError:
+            return v
+    return _num(v)
 
 
 class Skills:
@@ -331,7 +343,7 @@ class Skills:
             rows = spec.get("rows") or []
             ws = wb.create_sheet(re.sub(r"[\\/*?:\[\]]", "", str(spec.get("name") or "Sheet%d" % si))[:31])
             for r in rows:
-                ws.append([_num(c) for c in (r if isinstance(r, list) else [r])])
+                ws.append([_cell(c) for c in (r if isinstance(r, list) else [r])])
             if rows:
                 for c in ws[1]:
                     c.font = Font(bold=True, color="FFFFFF")
@@ -341,7 +353,9 @@ class Skills:
                 headers = [str(c.value or "") for c in ws[1]]
                 for row in ws.iter_rows(min_row=2):
                     for c in row:
-                        if isinstance(c.value, (int, float)) or (isinstance(c.value, str) and c.value.startswith("=")):
+                        if isinstance(c.value, datetime.date):
+                            c.number_format = "dd-mm-yyyy"
+                        elif isinstance(c.value, (int, float)) or (isinstance(c.value, str) and c.value.startswith("=")):
                             h = headers[c.column - 1]
                             c.number_format = "0.0%" if h.endswith("%") else "#,##0"
                 for i in range(1, ws.max_column + 1):
@@ -353,7 +367,7 @@ class Skills:
                 kind = str(cfg.get("type", "bar")).lower()
                 ch = {"line": LineChart, "pie": PieChart}.get(kind, BarChart)()
                 ch.title = cfg.get("title") or ws.title
-                last = len(rows)
+                last = int(cfg.get("last_row") or len(rows))
                 for col in cfg.get("series") or list(range(2, ws.max_column + 1)):
                     ch.add_data(Reference(ws, min_col=col, min_row=1, max_row=last), titles_from_data=True)
                     if kind == "pie":
@@ -370,7 +384,41 @@ class Skills:
         self._open(p)
         return "Excel dibuat: %s" % p
 
-    def _report_sheets(self, kind):
+    def _ledger(self, n):
+        """Buku kas harian: n baris transaksi contoh, saldo berjalan lewat rumus, ditambah sheet ringkasan."""
+        rnd = random.Random(11)
+        n = max(1, min(2000, int(n)))
+        masuk = [("Penjualan produk", 4_000_000, 25_000_000), ("Jasa konsultasi", 2_000_000, 15_000_000),
+                 ("Pendapatan langganan", 1_000_000, 8_000_000), ("Penerimaan piutang", 3_000_000, 20_000_000)]
+        keluar = [("Gaji karyawan", 5_000_000, 30_000_000), ("Sewa kantor", 3_000_000, 12_000_000),
+                  ("Listrik dan internet", 500_000, 3_000_000), ("Pembelian bahan", 2_000_000, 18_000_000),
+                  ("Iklan dan promosi", 1_000_000, 9_000_000), ("Transportasi", 200_000, 2_000_000),
+                  ("Perlengkapan kantor", 300_000, 4_000_000)]
+        day = datetime.date(datetime.date.today().year, 1, 1)
+        rows = [["Tanggal", "Keterangan", "Kategori", "Pemasukan", "Pengeluaran", "Saldo"]]
+        for i in range(2, n + 2):
+            day += datetime.timedelta(days=rnd.choice([0, 0, 1, 1, 2]))
+            if rnd.random() < 0.42:
+                name, lo, hi = rnd.choice(masuk)
+                cin, cout, cat = rnd.randrange(lo, hi, 50_000), 0, "Pemasukan"
+            else:
+                name, lo, hi = rnd.choice(keluar)
+                cin, cout, cat = 0, rnd.randrange(lo, hi, 50_000), "Pengeluaran"
+            saldo = "=D2-E2" if i == 2 else "=F%d+D%d-E%d" % (i - 1, i, i)
+            rows.append([day.isoformat(), name, cat, cin, cout, saldo])
+        last = n + 1
+        ring = [["Ringkasan", "Jumlah"],
+                ["Total pemasukan", "=SUM(Transaksi!D2:D%d)" % last],
+                ["Total pengeluaran", "=SUM(Transaksi!E2:E%d)" % last],
+                ["Laba bersih", "=B2-B3"],
+                ["Jumlah transaksi", "=COUNTA(Transaksi!A2:A%d)" % last]]
+        return [{"name": "Transaksi", "rows": rows},
+                {"name": "Ringkasan", "rows": ring, "chart": {"type": "bar", "title": "Pemasukan vs Pengeluaran", "series": [2],
+                                                              "last_row": 3}}]
+
+    def _report_sheets(self, kind, rows=None):
+        if kind == "transaksi":
+            return self._ledger(rows or 100)
         rnd = random.Random(7)
         months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
         if kind == "keuangan":
@@ -412,11 +460,13 @@ class Skills:
                              '=IF(B%d<10,"Perlu restok","Aman")' % i])
             rows.append(["Total", "=SUM(B2:B8)", "", "=SUM(D2:D8)", ""])
             return [{"name": "Inventaris", "rows": rows, "chart": {"type": "bar", "title": "Nilai Stok", "series": [4]}}]
-        raise SkillError("kind harus salah satu: keuangan, penjualan, anggaran, inventaris")
+        raise SkillError("kind harus salah satu: transaksi, keuangan, penjualan, anggaran, inventaris")
 
     def s_make_excel_report(self, a):
-        kind = str(a.get("kind", "keuangan")).lower()
-        sheets = self._report_sheets(kind)
+        kind = str(a.get("kind", "transaksi")).lower()
+        if kind in ("laporan keuangan", "laporan", "kas", "buku kas", "ledger"):
+            kind = "transaksi"
+        sheets = self._report_sheets(kind, a.get("rows"))
         if a.get("active"):
             try:
                 return self._write_sheets_com(sheets)
@@ -467,14 +517,14 @@ class Skills:
         for ch in from_col.group(1).upper():
             col0 = col0 * 26 + ord(ch) - 64
         row0 = int(from_col.group(2))
-        for r, row in enumerate(rows):
-            for c, val in enumerate(row if isinstance(row, list) else [row]):
-                val = _num(val)
-                cell = ws.Cells(row0 + r, col0 + c)
-                if isinstance(val, str) and val.startswith("="):
-                    cell.Formula = val
-                else:
-                    cell.Value = val
+        width = max(len(r) if isinstance(r, list) else 1 for r in rows)
+        grid = []
+        for row in rows:
+            cells = [(_num(v) if not isinstance(v, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v.strip())
+                      else datetime.date.fromisoformat(v.strip()).strftime("%d/%m/%Y")) for v in (row if isinstance(row, list) else [row])]
+            grid.append(tuple(cells + [""] * (width - len(cells))))
+        target = ws.Range(ws.Cells(row0, col0), ws.Cells(row0 + len(grid) - 1, col0 + width - 1))
+        target.Formula = tuple(grid)  # satu kali tulis: rumus tetap rumus, angka tetap angka
         header = ws.Range(ws.Cells(row0, col0), ws.Cells(row0, col0 + len(rows[0]) - 1))
         header.Font.Bold = True
         header.Interior.Color = 0x784E1F  # biru tua (BGR)
@@ -482,7 +532,7 @@ class Skills:
         ws.Range(ws.Cells(row0, col0), ws.Cells(row0 + len(rows) - 1, col0 + len(rows[0]) - 1)).Columns.AutoFit()
         for c, h in enumerate(rows[0]):
             rng = ws.Range(ws.Cells(row0 + 1, col0 + c), ws.Cells(row0 + len(rows) - 1, col0 + c))
-            rng.NumberFormat = "0.0%" if str(h).endswith("%") else "#,##0"
+            rng.NumberFormat = "0.0%" if str(h).endswith("%") else ("dd-mm-yyyy" if str(h).lower() == "tanggal" else "#,##0")
 
     def _com_chart(self, ws, spec):
         ch = spec.get("chart")
@@ -496,7 +546,8 @@ class Skills:
             left = ws.Cells(2, ncol + 2).Left
             shape = ws.Shapes.AddChart2(201, kind, left, ws.Cells(2, 1).Top, 480, 280)
             chart = shape.Chart
-            chart.SetSourceData(ws.Range(ws.Cells(1, 1), ws.Cells(len(rows), ncol)))
+            last = int(cfg.get("last_row") or len(rows))
+            chart.SetSourceData(ws.Range(ws.Cells(1, 1), ws.Cells(last, ncol)))
             chart.HasTitle = True
             chart.ChartTitle.Text = cfg.get("title") or spec.get("name", "")
         except Exception:

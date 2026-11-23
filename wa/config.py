@@ -32,12 +32,17 @@ DEFAULTS = {
         "max_elements": 45,
         "history_window": 6,
         "auto_reflect": True,
+        # Permintaan yang sangat jelas (mis. tabel Excel) langsung dikerjakan skill tanpa menebak lewat model.
+        "fast_paths": True,
         "stop_hotkey": "f12",
         "skill_match_threshold": 0.6,
     },
     "voice": {
         "enabled": True,
         "language": "id-ID",
+        # auto = Google dulu, lalu Whisper offline bila gagal | google | offline (tanpa internet, suara tetap di laptop)
+        "engine": "auto",
+        "offline_model": "base",
         "hotkey": "f9",
         # true = setelah ucapan dikenali, langsung dijalankan sebagai perintah
         "auto_run": True,

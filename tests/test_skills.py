@@ -35,6 +35,24 @@ class SkillTests(unittest.TestCase):
             self.assertTrue(ws._charts, kind)  # ada grafik
             self.assertTrue(any(isinstance(c.value, str) and c.value.startswith("=") for r in ws.iter_rows() for c in r))
 
+    def test_ledger_has_requested_rows_dates_and_formulas(self):
+        import datetime
+        import openpyxl
+        path = self.s.run("make_excel_report", {"kind": "transaksi", "rows": 100}).split(": ", 1)[1].split(" (")[0]
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Transaksi"]
+        self.assertEqual(ws.max_row, 101)  # header + 100 baris
+        self.assertIsInstance(ws["A2"].value, datetime.datetime)
+        self.assertEqual(ws["F2"].value, "=D2-E2")
+        self.assertEqual(ws["F101"].value, "=F100+D101-E101")
+        self.assertEqual(wb["Ringkasan"]["B2"].value, "=SUM(Transaksi!D2:D101)")
+        self.assertTrue(wb["Ringkasan"]._charts)
+        for r in range(2, 102):  # tiap baris: pemasukan atau pengeluaran, bukan keduanya
+            self.assertTrue((ws.cell(r, 4).value == 0) != (ws.cell(r, 5).value == 0))
+        # alias dan default
+        self.assertIn("Laporan transaksi", self.s.run("make_excel_report", {"kind": "laporan keuangan"}))
+        self.assertIn("Laporan transaksi", self.s.run("make_excel_report", {}))
+
     def test_keuangan_formulas_are_consistent(self):
         import openpyxl
         path = self.s.run("make_excel_report", {"kind": "keuangan"}).split(": ", 1)[1]

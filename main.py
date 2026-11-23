@@ -68,7 +68,13 @@ def main():
     parser = argparse.ArgumentParser(description=APP_TITLE)
     parser.add_argument("--cli", metavar="TUGAS", help="jalankan satu tugas lewat konsol tanpa GUI")
     parser.add_argument("--config", default=os.path.join(BASE, "config.json"))
+    parser.add_argument("--selftest", metavar="BERKAS", help="uji mandiri (dipakai saat build), tulis hasil ke BERKAS")
+    parser.add_argument("--selftest-model", action="store_true", help="sertakan uji model suara offline (unduh)")
     args = parser.parse_args()
+
+    if args.selftest:
+        from wa.selftest import run as selftest
+        return selftest(args.selftest, with_model=args.selftest_model)
 
     if sys.platform != "win32":
         print("Aplikasi ini hanya bisa dijalankan di Windows.")

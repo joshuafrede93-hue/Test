@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from .llm import ACTION_SCHEMA, LLMError, extract_json
+from .llm import LLMError, build_action_schema, extract_json
 from .skills import SKILL_NAMES, Skills, SkillError, catalog_text
 
 ID_ACTIONS = ("click", "double_click", "right_click")
@@ -25,7 +25,7 @@ Actions:
 - ask_user {"question": "..."}   done {"summary": "..."}   fail {"reason": "..."}
 - skill {"name": "<skill>", "args": {...}}   built-in tools, see the Skills list below
 
-Skills are fast and exact: ALWAYS prefer a skill over clicking or typing cell by cell when one fits
+Skills are fast and exact: for spreadsheets, Word and PowerPoint files your FIRST action must be a skill, never open_app or clicking. ALWAYS prefer a skill over clicking or typing cell by cell when one fits
 (creating spreadsheets, Word or PowerPoint files, organizing, reading or finding files, searching the web, system info).
 The skill result appears in "Steps so far". After a skill that finished the job, reply with done.
 
@@ -44,8 +44,10 @@ Rules:
 Examples:
 Task: write hello in Notepad. No window open ->
 {"thought": "start Notepad", "action": "open_app", "name": "notepad", "risk": "low"}
-Task: make a sample financial report in the Excel that is open ->
-{"thought": "use the report skill", "action": "skill", "name": "make_excel_report", "args": {"kind": "keuangan", "active": true}, "risk": "low"}
+Task: open Excel and make a financial table with 100 rows of dummy data (Excel not open yet) ->
+{"thought": "use the report skill", "action": "skill", "name": "make_excel_report", "args": {"kind": "transaksi", "rows": 100}, "risk": "low"}
+Task: fill the Excel sheet that is already open with a sample financial report ->
+{"thought": "write into open Excel", "action": "skill", "name": "make_excel_report", "args": {"kind": "keuangan", "active": true}, "risk": "low"}
 Window Notepad, element [3] Edit "Text editor" ->
 {"thought": "type the text", "action": "type", "id": 3, "text": "hello", "risk": "low"}
 Text is visible in the editor ->
@@ -54,6 +56,39 @@ Text is visible in the editor ->
 
 def system_prompt():
     return SYSTEM_PROMPT + "\n\nSkills:\n" + catalog_text()
+
+
+_MAKE_WORDS = re.compile(r"\b(buat|buatkan|bikin|bikinkan|susun|susunkan|generate|create|make|isi|isikan)\b", re.I)
+_EXCEL_WORDS = re.compile(r"\b(excel|spreadsheet|xlsx|lembar kerja)\b", re.I)
+_TABLE_WORDS = re.compile(r"\b(tabel|laporan|data|baris|rekap|transaksi|kas)\b", re.I)
+_OPEN_EXCEL = re.compile(r"(yang|di)\s+(sedang\s+)?(saya\s+)?(buka|dibuka|terbuka)|excel\s+(ini|yang terbuka)", re.I)
+
+
+def route_goal(goal):
+    """Jalan pintas untuk permintaan yang sangat jelas (tabel/laporan Excel): langsung ke skill, tanpa menebak lewat model.
+    Mengembalikan dict aksi atau None."""
+    g = goal or ""
+    if not (_MAKE_WORDS.search(g) and _EXCEL_WORDS.search(g) and _TABLE_WORDS.search(g)):
+        return None
+    low = g.lower()
+    if re.search(r"penjualan|omzet|sales", low):
+        kind = "penjualan"
+    elif re.search(r"anggaran|budget", low):
+        kind = "anggaran"
+    elif re.search(r"inventaris|stok|stock|persediaan", low):
+        kind = "inventaris"
+    elif re.search(r"laba rugi|arus kas|bulanan|per bulan", low):
+        kind = "keuangan"
+    else:
+        kind = "transaksi"
+    args = {"kind": kind}
+    m = re.search(r"(\d{1,4})\s*(baris|row|rows|data|transaksi)", low)
+    if m and kind == "transaksi":
+        args["rows"] = int(m.group(1))
+    if _OPEN_EXCEL.search(low):
+        args["active"] = True
+    return {"action": "skill", "name": "make_excel_report", "args": args, "risk": "low",
+            "thought": "jalan pintas: laporan Excel lewat skill"}
 
 
 @dataclass
@@ -270,6 +305,9 @@ def build_messages(goal, obs, history, lessons, facts, cfg):
     ]
 
 
+ACTION_SCHEMA = build_action_schema(SKILL_NAMES)
+
+
 class Agent:
     def __init__(self, llm, env, memory, safety, ui, cfg, skills=None):
         """cfg: dict konfigurasi penuh (memakai cfg['agent'])."""
@@ -387,6 +425,24 @@ class Agent:
                     return Result("stopped", "Dihentikan pengguna.", len(steps_done), executed)
                 history.append("Skill gagal (%s). Lanjutkan sendiri dari kondisi layar sekarang." % msg)
                 self.ui.log("Skill gagal: %s. AI melanjutkan sendiri." % msg)
+
+        shortcut = route_goal(goal) if self.cfg.get("fast_paths", True) else None
+        if shortcut:
+            try:
+                obs0 = self.env.observe()
+            except Exception:
+                obs0 = Observation()
+            if validate_action(shortcut, obs0) is None and self._confirm_risky(shortcut, None, obs0):
+                self.ui.log("Jalan pintas: %s" % describe(shortcut, obs0))
+                try:
+                    ok, msg = self._do(shortcut)
+                except Exception as e:
+                    ok, msg = False, str(e)
+                if ok:
+                    self.ui.log("Hasil: " + str(msg)[:200])
+                    return Result("done", str(msg), 1, [make_step(shortcut, obs0)])
+                history.append("%s -> GAGAL: %s" % (describe(shortcut, obs0), msg))
+                self.ui.log("Jalan pintas gagal (%s). AI mencoba cara lain." % msg)
 
         for step_no in range(1, max_steps + 1):
             if self.ui.should_stop():

@@ -12,3 +12,4 @@ openpyxl
 python-docx
 python-pptx
 pypdf
+faster-whisper

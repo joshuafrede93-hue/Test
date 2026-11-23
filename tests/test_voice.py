@@ -74,6 +74,81 @@ class VoiceTests(unittest.TestCase):
             winui.flash(object())
 
 
+class RecognizerTests(unittest.TestCase):
+    class FakeOffline:
+        def __init__(self, text="", fail=False):
+            self.text, self.fail, self.calls = text, fail, 0
+
+        def transcribe(self, pcm, lang):
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("model rusak")
+            return self.text
+
+    def test_google_first_then_offline(self):
+        off = self.FakeOffline("buka excel")
+        r = voice.Recognizer({}, google=lambda p, l: "", offline=off)
+        self.assertEqual(r(b"x", "id-ID"), "buka excel")
+        self.assertEqual(r.last_engine, "offline")
+        r2 = voice.Recognizer({}, google=lambda p, l: "buka notepad", offline=off)
+        self.assertEqual(r2(b"x", "id-ID"), "buka notepad")
+        self.assertEqual(r2.last_engine, "Google")
+        self.assertEqual(off.calls, 1)  # offline tidak dipanggil bila Google berhasil
+
+    def test_google_error_falls_back_and_reports(self):
+        def bad(p, l):
+            raise VoiceError("tidak ada internet")
+        off = self.FakeOffline("")
+        r = voice.Recognizer({}, google=bad, offline=off)
+        self.assertEqual(r(b"x", "id-ID"), "")
+        self.assertTrue(any("internet" in e for e in r.last_errors))
+        off2 = self.FakeOffline(fail=True)
+        r = voice.Recognizer({}, google=bad, offline=off2)
+        self.assertEqual(r(b"x", "id-ID"), "")
+        self.assertTrue(any("offline" in e for e in r.last_errors))
+
+    def test_engine_choice(self):
+        off = self.FakeOffline("offline saja")
+        r = voice.Recognizer({"engine": "offline"}, google=lambda p, l: self.fail("tidak boleh"), offline=off)
+        self.assertEqual(r(b"x", "id-ID"), "offline saja")
+
+    def test_save_wav_roundtrip(self):
+        import tempfile
+        import wave
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "a", "x.wav")
+            voice.save_wav(chunk(1000) * 3, p)
+            with wave.open(p) as w:
+                self.assertEqual((w.getframerate(), w.getnchannels(), w.getnframes()), (16000, 1, 4800))
+
+
+class OfflineModelTests(unittest.TestCase):
+    def test_ensure_model_downloads_missing_files_only(self):
+        import tempfile
+        from wa import stt_offline
+        got = []
+        def fake(url, dest, prog, stop):
+            got.append(url.rsplit("/", 1)[1])
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            open(dest, "wb").close()
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(stt_offline.is_ready(d, "base"))
+            path = stt_offline.ensure_model(d, "base", downloader=fake)
+            self.assertTrue(stt_offline.is_ready(d, "base"))
+            self.assertEqual(sorted(got), sorted(stt_offline.FILES))
+            self.assertEqual(stt_offline.ensure_model(d, "base", downloader=fake), path)
+            self.assertEqual(len(got), 4)  # tidak mengunduh ulang
+
+    def test_download_failure_is_clear(self):
+        import tempfile
+        from wa import stt_offline
+        def bad(url, dest, prog, stop):
+            raise OSError("putus")
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(stt_offline.OfflineError):
+                stt_offline.ensure_model(d, "tiny", downloader=bad)
+
+
 class IconTests(unittest.TestCase):
     def test_icons_draw(self):
         from wa.icons import make_icon

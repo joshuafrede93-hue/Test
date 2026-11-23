@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wa.config import load_config
-from wa.core import Agent, Observation, UI, match_element, validate_action
+from wa.core import Agent, Observation, UI, match_element, route_goal, validate_action
 from wa.llm import LLMError, LocalLLM, extract_json
 from wa.memory import Memory
 from wa.safety import Safety
@@ -98,6 +98,27 @@ class TestSkillsInAgent(unittest.TestCase):
         self.assertIsNone(validate_action(b, o))
         self.assertEqual(b["name"], "excel")
         self.assertIsNotNone(validate_action({"action": "focus_window"}, o))
+
+    def test_route_goal(self):
+        r = route_goal("buka excel dan buatkan tabel laporan keuangan dengan 100 baris data dummy")
+        self.assertEqual(r["args"], {"kind": "transaksi", "rows": 100})
+        self.assertEqual(route_goal("buatkan laporan penjualan di excel")["args"], {"kind": "penjualan"})
+        self.assertTrue(route_goal("pada excel yang saya buka buatkan laporan keuangan bulanan")["args"]["active"])
+        self.assertIsNone(route_goal("buka excel"))
+        self.assertIsNone(route_goal("tutup excel dan hapus datanya"))
+        self.assertIsNone(route_goal("tulis hello di notepad"))
+
+    def test_shortcut_runs_skill_without_llm(self):
+        with tempfile.TemporaryDirectory() as d:
+            sk = FakeSkills()
+            cfg = load_config(None)
+            cfg["agent"].update({"step_delay": 0, "auto_reflect": False})
+            llm = FakeLLM([])  # tidak boleh dipanggil
+            agent = Agent(llm, FakeEnv([obs("x")]), Memory(d), Safety(cfg["safety"]), ScriptedUI(), cfg, skills=sk)
+            r = agent.run("buka excel dan buatkan tabel laporan keuangan dengan 100 baris data dummy")
+            self.assertEqual(r.status, "done")
+            self.assertEqual(sk.ran[0][1], {"kind": "transaksi", "rows": 100})
+            self.assertEqual(llm.calls, 0)
 
     def test_skill_validation(self):
         o = obs("x")

@@ -47,31 +47,38 @@ def extract_json(text):
     return None
 
 
-ACTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "thought": {"type": "string", "maxLength": 140},
-        "action": {"type": "string", "enum": [
-            "click", "double_click", "right_click", "type", "hotkey", "press", "scroll", "open_app",
-            "focus_window", "wait", "ask_user", "done", "fail", "skill"]},
-        "id": {"type": "integer"},
-        "text": {"type": "string"},
-        "enter": {"type": "boolean"},
-        "replace": {"type": "boolean"},
-        "keys": {"type": "array", "items": {"type": "string"}},
-        "key": {"type": "string"},
-        "amount": {"type": "integer"},
-        "name": {"type": "string"},
-        "title": {"type": "string"},
-        "seconds": {"type": "number"},
-        "question": {"type": "string"},
-        "summary": {"type": "string"},
-        "reason": {"type": "string"},
-        "args": {"type": "object"},
-        "risk": {"type": "string", "enum": ["low", "high"]},
-    },
-    "required": ["thought", "action", "risk"],
-}
+def _action_variant(name, required=None, optional=None):
+    """Satu bentuk aksi. Urutan properti tetap (thought, action, parameter, risk) agar tata bahasa keluaran sederhana."""
+    props = {"thought": {"type": "string", "maxLength": 140}, "action": {"type": "string", "enum": [name]}}
+    props.update(required or {})
+    props.update(optional or {})
+    props["risk"] = {"type": "string", "enum": ["low", "high"]}
+    req = ["thought", "action"] + list((required or {}).keys()) + ["risk"]
+    return {"type": "object", "properties": props, "required": req}
+
+
+def build_action_schema(skill_names=()):
+    """Skema JSON per aksi: parameter wajib benar-benar wajib, jadi model tidak bisa lupa 'name' atau 'title'."""
+    string, integer = {"type": "string"}, {"type": "integer"}
+    variants = [_action_variant(n, {"id": integer}) for n in ("click", "double_click", "right_click")]
+    variants += [
+        _action_variant("type", {"text": string}, {"id": integer, "enter": {"type": "boolean"}, "replace": {"type": "boolean"}}),
+        _action_variant("hotkey", {"keys": {"type": "array", "items": string, "minItems": 1}}),
+        _action_variant("press", {"key": string}),
+        _action_variant("scroll", {"amount": integer}),
+        _action_variant("open_app", {"name": string}),
+        _action_variant("focus_window", {"title": string}),
+        _action_variant("wait", {"seconds": {"type": "number"}}),
+        _action_variant("ask_user", {"question": string}),
+        _action_variant("done", {"summary": string}),
+        _action_variant("fail", {"reason": string}),
+    ]
+    skill_name = {"type": "string", "enum": list(skill_names)} if skill_names else string
+    variants.append(_action_variant("skill", {"name": skill_name, "args": {"type": "object"}}))
+    return {"anyOf": variants}
+
+
+ACTION_SCHEMA = build_action_schema()
 
 
 class LocalLLM:

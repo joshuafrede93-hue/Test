@@ -30,7 +30,14 @@ jobs:
         timeout-minutes: 3
         run: python tests/smoke_gui.py
       - name: Bangun exe
-        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-all customtkinter --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard --collect-all speech_recognition --collect-all sounddevice --hidden-import winotify --collect-all docx --collect-all pptx --collect-all openpyxl --hidden-import pypdf --hidden-import win32com.client --hidden-import pythoncom main.py
+        run: pyinstaller --noconfirm --clean --windowed --name AsistenPC --collect-submodules comtypes --collect-all customtkinter --collect-submodules pywinauto --hidden-import pyperclip --hidden-import keyboard --collect-all speech_recognition --collect-all sounddevice --hidden-import winotify --collect-all docx --collect-all pptx --collect-all openpyxl --hidden-import pypdf --hidden-import win32com.client --hidden-import pythoncom --collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers --collect-all av --collect-all huggingface_hub main.py
+      - name: Uji exe hasil build
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          Start-Process dist/AsistenPC/AsistenPC.exe -ArgumentList '--selftest','selftest.txt','--selftest-model' -Wait
+          if (Test-Path selftest.txt) { Get-Content selftest.txt } else { Write-Host 'selftest.txt tidak dibuat' }
+          if (-not (Test-Path selftest.txt) -or -not (Select-String -Path selftest.txt -Pattern 'RESULT OK' -Quiet)) { exit 1 }
       - name: Siapkan folder hasil
         shell: pwsh
         run: |

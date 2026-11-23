@@ -10,7 +10,7 @@ import sys
 from . import APP_TITLE, __version__, winui
 from .core import UI
 from .lmstudio_setup import Setup, SetupError
-from .voice import Listener, VoiceError
+from .voice import Listener, Recognizer, VoiceError
 
 
 class GuiBridge(UI):
@@ -169,6 +169,7 @@ class App:
         self.listening = False
         self.voice_noted = False
         self.voice_cfg = cfg.get("voice", {})
+        self._recognizer = None
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -463,13 +464,16 @@ class App:
             self.voice_noted = True
         self.write("Mendengarkan... ucapkan perintah Anda.", "task")
         self._make_overlay("Mendengarkan perintah suara...", PALETTE["bad"])
-        winui.beep("tick")
         threading.Thread(target=self._voice_worker, daemon=True).start()
 
     def _voice_worker(self):
         text, error, lst = "", None, None
         try:
-            lst = Listener(self.voice_cfg)
+            rec = Recognizer(self.voice_cfg, os.path.join(self.base_dir, "data"),
+                             log=lambda m: self.q.put(("log", m)))
+            self._recognizer = rec
+            lst = Listener(self.voice_cfg, recognizer=rec,
+                           debug_wav=os.path.join(self.base_dir, "data", "voice_last.wav"))
             text = lst.listen(should_stop=self._voice_stop,
                               on_status=lambda s: self.q.put(("call", lambda: self._voice_status(s))))
         except VoiceError as e:
@@ -477,7 +481,15 @@ class App:
         except Exception as e:
             error = "Perintah suara gagal: %s" % e
         peak = int(lst.last_peak) if lst else 0
-        self.q.put(("call", lambda: self._voice_done(text, error, peak)))
+        info = ""
+        if lst:
+            rec = self._recognizer
+            info = "rekaman %.1f detik" % lst.last_seconds
+            if rec.last_engine:
+                info += ", dikenali oleh %s" % rec.last_engine
+            elif getattr(rec, "last_errors", None) and not text:
+                info += "; " + " | ".join(rec.last_errors)[:260]
+        self.q.put(("call", lambda: self._voice_done(text, error, peak, info)))
 
     def _voice_stop(self):
         return self.stop_event.is_set()
@@ -486,7 +498,7 @@ class App:
         if self.overlay_title is not None and status == "recognizing":
             self.overlay_title.configure(text="Mengenali ucapan...", text_color=PALETTE["warn"])
 
-    def _voice_done(self, text, error, peak=0):
+    def _voice_done(self, text, error, peak=0, info=""):
         self.listening = False
         self.stop_event.clear()
         self.mic_btn.configure(image=self.icon_mic, fg_color=PALETTE["panel"], hover_color=PALETTE["line"])
@@ -497,11 +509,11 @@ class App:
             self.write("Suara gagal: " + error, "bad")
             return
         if not text:
-            self.write("Tidak ada ucapan yang terdengar jelas (level suara tertinggi: %d). Bicara lebih dekat ke "
-                       "mikrofon lalu coba lagi. Jika angkanya selalu di bawah 100, periksa mikrofon dan izin "
-                       "mikrofon Windows (Pengaturan > Privasi > Mikrofon > izinkan aplikasi desktop)." % peak, "warn")
+            self.write("Ucapan tidak berhasil dikenali (%s; level suara tertinggi %d). Bicara lebih dekat ke mikrofon "
+                       "lalu coba lagi. Rekaman terakhir ada di data\\voice_last.wav." % (info or "tidak ada rekaman", peak),
+                       "warn")
             return
-        self.write('Terdengar: "%s"' % text, "ok")
+        self.write('Terdengar: "%s"  (%s)' % (text, info), "ok")
         self.goal_var.set(text)
         if self.voice_cfg.get("auto_run", True):
             self.start()
@@ -597,6 +609,20 @@ class App:
     # ---------- setup LM Studio ----------
     def _startup_checks(self):
         threading.Thread(target=self._startup_worker, daemon=True).start()
+        if self.voice_cfg.get("enabled", True) and self.voice_cfg.get("engine", "auto") != "google":
+            threading.Thread(target=self._prepare_offline_voice, daemon=True).start()
+
+    def _prepare_offline_voice(self):
+        """Unduh model suara offline di latar belakang (sekali saja) agar siap saat dibutuhkan."""
+        from . import stt_offline
+        size = self.voice_cfg.get("offline_model", "base")
+        data = os.path.join(self.base_dir, "data")
+        if stt_offline.is_ready(data, size):
+            return
+        try:
+            stt_offline.ensure_model(data, size, log=lambda m: self.q.put(("log", m)))
+        except Exception as e:
+            self.q.put(("log", "Catatan: model suara offline belum bisa diunduh (%s)." % e))
 
     def _startup_worker(self):
         bridge = GuiBridge(self.q, self.stop_event)

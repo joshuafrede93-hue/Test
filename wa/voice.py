@@ -5,6 +5,7 @@ paket SpeechRecognition, jadi butuh internet. Hanya potongan suara yang dikirim,
 """
 import array
 import math
+import os
 import time
 
 RATE = 16000
@@ -90,6 +91,59 @@ def transcribe(pcm, language="id-ID"):
         raise VoiceError("Layanan pengenalan suara tidak terjangkau (%s). Periksa koneksi internet." % e)
 
 
+class Recognizer:
+    """Google dulu (cepat, butuh internet); bila gagal atau kosong, pakai Whisper offline sebagai cadangan."""
+
+    def __init__(self, cfg, base_dir=".", log=lambda m: None, google=None, offline=None):
+        self.cfg = cfg or {}
+        self.google = google or transcribe
+        self.offline = offline
+        self.base_dir, self.log = base_dir, log
+        self.last_engine = ""
+        self.last_errors = []
+
+    def _offline(self):
+        if self.offline is None:
+            from .stt_offline import OfflineRecognizer
+            self.offline = OfflineRecognizer(self.base_dir, self.cfg.get("offline_model", "base"), self.log)
+        return self.offline
+
+    def __call__(self, pcm, language):
+        engine = self.cfg.get("engine", "auto")  # auto | google | offline
+        errors = []
+        if engine in ("auto", "google"):
+            try:
+                text = self.google(pcm, language)
+                if text:
+                    self.last_engine = "Google"
+                    return text
+                errors.append("Google tidak mengenali ucapan")
+            except VoiceError as e:
+                errors.append(str(e))
+        if engine in ("auto", "offline"):
+            try:
+                text = self._offline().transcribe(pcm, language)
+                self.last_engine = "offline"
+                if text:
+                    return text
+                errors.append("pengenal offline tidak menemukan ucapan")
+            except Exception as e:
+                errors.append("offline: %s" % e)
+        self.last_engine = ""
+        self.last_errors = errors
+        return ""
+
+
+def save_wav(pcm, path):
+    import wave
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm)
+
+
 def open_microphone():
     """Buka mikrofon bawaan. Mengembalikan (read_chunk, close)."""
     try:
@@ -118,7 +172,9 @@ def open_microphone():
 
 
 class Listener:
-    def __init__(self, cfg, opener=open_microphone, recognizer=transcribe):
+    def __init__(self, cfg, opener=open_microphone, recognizer=transcribe, debug_wav=None):
+        self.debug_wav = debug_wav  # jika diisi: simpan rekaman terakhir untuk diperiksa
+        self.last_seconds = 0.0
         self.cfg = cfg or {}
         self.opener = opener
         self.recognizer = recognizer
@@ -142,7 +198,13 @@ class Listener:
                 on_level=level)
         finally:
             close()
+        self.last_seconds = len(pcm) / 2.0 / RATE
         if not pcm or should_stop():
             return ""
+        if self.debug_wav:
+            try:
+                save_wav(pcm, self.debug_wav)
+            except OSError:
+                pass
         on_status("recognizing")
         return self.recognizer(pcm, self.cfg.get("language", "id-ID"))
